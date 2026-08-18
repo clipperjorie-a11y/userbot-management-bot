@@ -36,28 +36,39 @@ async def start_cmd(client, message):
     user_data = db.get("users", {}).get(user_id, {"plan": "none", "expired": "Tidak Aktif", "target_groups": {}, "session": ""})
     
     is_logged_in = "✅ Terhubung" if user_data.get("session") else "❌ Belum Login"
+    plan_status = user_data.get("plan", "none").upper()
 
     text = (
-        f"🤖 **Userbot Control Panel**\n\n"
-        f"🆔 **ID Anda:** `{user_id}`\n"
-        f"📱 **Status Akun:** **{is_logged_in}**\n"
-        f"📦 **Status Paket:** **{user_data.get('plan', 'none').upper()}**\n"
-        f"⏳ **Masa Aktif:** `{user_data.get('expired', 'Tidak Aktif')}`\n\n"
-        f"Kelola akun dan fitur userbot Anda di bawah ini:"
+        f"🤖 **USERBOT CONTROL PANEL**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 **ID Telegram:** `{user_id}`\n"
+        f"📱 **Status Login:** **{is_logged_in}**\n"
+        f"📦 **Paket Aktif:** **{plan_status}**\n"
+        f"⏳ **Masa Aktif:** `{user_data.get('expired', 'Tidak Aktif')}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Silakan pilih menu pengaturan di bawah ini:"
     )
     
+    # --- SUSUNAN TOMBOL PEKETIPLEK PANEL INTERAKTIF ---
     keyboard = []
-    if not user_data.get("session"):
-        keyboard.append([InlineKeyboardButton("📱 Login Akun Userbot (OTP)", callback_data="login_otp")])
-    else:
-        keyboard.append([InlineKeyboardButton("🚪 Logout Akun Userbot", callback_data="logout_ubot")])
-
-    if user_data.get("plan") in ["jaseb", "spesial"]:
-        keyboard.append([InlineKeyboardButton("📢 Setting Grup Jaseb", callback_data="menu_groups")])
-    if user_data.get("plan") in ["wtb", "spesial"]:
-        keyboard.append([InlineKeyboardButton("🎯 Setting Grup WTB", callback_data="menu_groups")])
     
-    keyboard.append([InlineKeyboardButton("💳 Beli Paket (Payment QRIS)", callback_data="buy_menu")])
+    # Baris 1: Status Login / Logout
+    if not user_data.get("session"):
+        keyboard.append([InlineKeyboardButton("🔑 Login Userbot (OTP)", callback_data="login_otp")])
+    else:
+        keyboard.append([InlineKeyboardButton("🚪 Logout Userbot", callback_data="logout_ubot")])
+
+    # Baris 2: Pengaturan Fitur Grup (Jaseb & WTB dibuat 2 kolom bersampingan)
+    keyboard.append([
+        InlineKeyboardButton("📢 Setting Jaseb", callback_data="menu_groups"),
+        InlineKeyboardButton("🎯 Setting WTB", callback_data="menu_groups")
+    ])
+
+    # Baris 3: Pembelian & Bantuan (2 Kolom)
+    keyboard.append([
+        InlineKeyboardButton("💳 Beli Paket (QRIS)", callback_data="buy_menu"),
+        InlineKeyboardButton("💬 Bantuan / CS", url=f"tg://user?id={OWNER_ID}")
+    ])
     
     await message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -74,9 +85,11 @@ async def callback_handler(client, cb: CallbackQuery):
         
         login_sessions[user_id] = {"step": "phone"}
         await cb.message.edit_text(
-            "📱 **LOGIN USERBOT VIA OTP**\n\n"
-            "Silakan kirimkan **Nomor Telepon** akun Telegram Anda yang ingin dijadikan Userbot.\n"
-            "Gunakan format internasional (contoh: `+6281234567890`)."
+            "📱 **LOGIN USERBOT VIA OTP**\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "Silakan kirimkan **Nomor Telepon** akun Telegram Anda.\n"
+            "Gunakan format internasional (Contoh: `+6281234567890`).\n\n"
+            "*(Ketik /cancel jika ingin membatalkan)*"
         )
 
     elif data == "logout_ubot":
@@ -87,12 +100,17 @@ async def callback_handler(client, cb: CallbackQuery):
         await start_cmd(client, cb.message)
 
     elif data == "buy_menu":
-        text = "🛒 **PILIH PAKET USERBOT**\n\nSilakan pilih paket:"
+        text = (
+            "🛒 **PILIH PAKET SEWA USERBOT**\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "Pilih daftar paket yang tersedia di bawah ini:"
+        )
         keyboard = [
-            [InlineKeyboardButton("Basic / Jaseb (Rp3.500/Bln)", callback_data="buy_jaseb_30")],
-            [InlineKeyboardButton("Auto Reply WTB (Rp5.000/Bln)", callback_data="buy_wtb_30")],
-            [InlineKeyboardButton("Full Fitur Spesial (Rp7.000/Bln)", callback_data="buy_spesial_30")],
-            [InlineKeyboardButton("Full Fitur Permanen (Rp35.000)", callback_data="buy_spesial_perm")],
+            [InlineKeyboardButton("📢 Basic Jaseb — Rp3.500/Bln", callback_data="buy_jaseb_30")],
+            [InlineKeyboardButton("🎯 Auto Reply WTB — Rp5.000/Bln", callback_data="buy_wtb_30")],
+            [InlineKeyboardButton("⚡ Full Spesial — Rp7.000/Bln", callback_data="buy_spesial_30")],
+            [InlineKeyboardButton("👑 Full Permanen — Rp35.000", callback_data="buy_spesial_perm")],
+            [InlineKeyboardButton("⬅️ Kembali ke Menu Utama", callback_data="back_main")]
         ]
         await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -106,14 +124,31 @@ async def callback_handler(client, cb: CallbackQuery):
             db["payments"][trx_id] = {"user_id": user_id, "plan": plan, "dur": dur, "status": "pending"}
             save_db(db)
             await cb.message.edit_text(
-                f"💳 **PEMBAYARAN QRIS OTOMATIS**\n\nPaket: **{plan.upper()}**\nTotal: **Rp{amount:,}**\n\nScan QRIS untuk bayar:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cek Status Pembayaran", callback_data=f"check_{trx_id}")]])
+                f"💳 **PEMBAYARAN QRIS OTOMATIS**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Paket: **{plan.upper()}**\n"
+                f"Total Biaya: **Rp{amount:,}**\n\n"
+                f"Silakan scan QRIS atau bayar via tombol di bawah:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Cek Status Pembayaran", callback_data=f"check_{trx_id}")],
+                    [InlineKeyboardButton("⬅️ Batal / Kembali", callback_data="buy_menu")]
+                ])
             )
         else:
-            await cb.message.edit_text(f"💳 **PEMBAYARAN MANUAL**\n\nTransfer Rp{amount:,} ke Owner (`{OWNER_ID}`).")
+            await cb.message.edit_text(
+                f"💳 **PEMBAYARAN MANUAL**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Silakan transfer sebesar **Rp{amount:,}** ke Owner (`{OWNER_ID}`).\n"
+                f"Konfirmasi bukti transfer ke Owner.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="buy_menu")]])
+            )
 
     elif data == "menu_groups":
-        text = "📋 **PILIH GRUP TARGET WORK USERBOT**\n\nKlik tombol di bawah untuk mengaktifkan [✅] atau mematikan [❌] grup:"
+        text = (
+            "📋 **PENGATURAN GRUP TARGET WORK**\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "Klik nama grup di bawah untuk mengaktifkan [✅] atau mematikan [❌] fitur auto-forward/reply:"
+        )
         target_dict = user_data.get("target_groups", {})
         keyboard = []
 
@@ -123,9 +158,9 @@ async def callback_handler(client, cb: CallbackQuery):
                 status_icon = "✅" if is_active else "❌"
                 keyboard.append([InlineKeyboardButton(f"{status_icon} {chat_info.get('name', chat_id)}", callback_data=f"toggle_grp_{chat_id}")])
         else:
-            text += "\n\n*(Belum ada grup terdeteksi. Silakan login akun dan masuk ke grup LPM terlebih dahulu)*"
+            text += "\n\n*(Belum ada grup terdeteksi. Silakan Login akun dan pastikan akun bergabung di grup LPM)*"
 
-        keyboard.append([InlineKeyboardButton("⬅️ Kembali", callback_data="back_main")])
+        keyboard.append([InlineKeyboardButton("⬅️ Kembali ke Menu", callback_data="back_main")])
         await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("toggle_grp_"):
@@ -137,13 +172,13 @@ async def callback_handler(client, cb: CallbackQuery):
             target_dict[chat_id]["active"] = not current_status
             db["users"][user_id]["target_groups"] = target_dict
             save_db(db)
-            await cb.answer("Status grup diperbarui!", show_alert=True)
+            await cb.answer("Status grup berhasil diperbarui!", show_alert=True)
             await callback_handler(client, cb)
 
     elif data == "back_main":
         await start_cmd(client, cb.message)
 
-@app.on_message(filters.private & filters.text & ~filters.command(["start", "addprem", "addseller"]))
+@app.on_message(filters.private & filters.text & ~filters.command(["start", "addprem", "addseller", "cancel"]))
 async def login_input_handler(client, message):
     user_id = str(message.from_user.id)
     if user_id not in login_sessions:
@@ -166,9 +201,11 @@ async def login_input_handler(client, message):
                 "client": temp_client
             }
             await message.reply_text(
-                "📩 **Kode OTP telah dikirim oleh Telegram!**\n\n"
-                "Silakan masukkan kode OTP yang Anda terima.\n"
-                "⚠️ **Sangat Penting:** Kirim kode dengan format berjarak/spasi (contoh: jika kode `12345`, kirimkan: `1 2 3 4 5`)."
+                "📩 **KODE OTP TERKIRIM!**\n"
+                "━━━━━━━━━━━━━━━━━━━━━\n"
+                "Masukkan kode OTP yang dikirim oleh Telegram.\n\n"
+                "⚠️ **PENTING:** Format kirim kode harus menggunakan spasi!\n"
+                "Contoh: jika kode `12345`, kirimkan: `1 2 3 4 5`"
             )
         except Exception as e:
             try:
@@ -176,7 +213,7 @@ async def login_input_handler(client, message):
             except Exception:
                 pass
             del login_sessions[user_id]
-            await message.reply_text(f"❌ Gagal mengirim OTP: `{e}`\nSilakan coba klik menu Login lagi.")
+            await message.reply_text(f"❌ Gagal mengirim OTP: `{e}`\nSilakan coba lagi dari menu /start.")
 
     elif step == "otp":
         otp_code = text.replace(" ", "").replace("-", "")
@@ -203,10 +240,10 @@ async def login_input_handler(client, message):
 
         except SessionPasswordNeeded:
             login_sessions[user_id]["step"] = "2fa"
-            await message.reply_text("🔐 Akun Anda menggunakan Verifikasi 2-Langkah (2FA).\nSilakan ketik dan kirim **Password 2FA** Anda:")
+            await message.reply_text("🔐 Akun Anda menggunakan Verifikasi 2-Langkah (2FA).\nSilakan masukkan **Password 2FA** Anda:")
 
         except (PhoneCodeInvalid, PhoneCodeExpired) as e:
-            await message.reply_text("❌ Kode OTP salah atau kadaluarsa. Silakan ulang proses login dari menu /start.")
+            await message.reply_text("❌ Kode OTP salah/kadaluarsa. Silakan ulang proses login.")
             try:
                 await temp_client.disconnect()
             except Exception:
@@ -234,7 +271,7 @@ async def login_input_handler(client, message):
             save_db(db)
 
             del login_sessions[user_id]
-            await message.reply_text("🎉 **LOGIN BERHASIL!**\nAkun Userbot Anda telah aktif dan terhubung ke sistem.")
+            await message.reply_text("🎉 **LOGIN BERHASIL!**\nAkun Userbot Anda telah terhubung.")
         except Exception as e:
             await message.reply_text(f"❌ Password 2FA Salah/Gagal: `{e}`")
 
@@ -251,7 +288,7 @@ async def addprem_cmd(client, message):
     seller_role = db.get("sellers", {}).get(str(actor_id))
 
     if not is_owner and not seller_role:
-        return await message.reply_text("❌ Akses ditolak! Anda bukan Seller atau Owner.")
+        return await message.reply_text("❌ Akses ditolak!")
 
     exp_date = (datetime.now() + timedelta(days=180 if duration in ["perm", "permanen"] else int(''.join(filter(str.isdigit, duration)) or 30))).strftime("%Y-%m-%d")
     
@@ -263,7 +300,7 @@ async def addprem_cmd(client, message):
     db["users"][target_id]["plan"] = plan
     db["users"][target_id]["expired"] = exp_date
     save_db(db)
-    await message.reply_text(f"✅ Akses **{plan.upper()}** berhasil diberikan ke `{target_id}` hingga `{exp_date}`.")
+    await message.reply_text(f"✅ Akses **{plan.upper()}** diberikan ke `{target_id}` hingga `{exp_date}`.")
 
 @app.on_message(filters.command("addseller") & filters.private)
 async def addseller_cmd(client, message):
@@ -280,4 +317,4 @@ async def addseller_cmd(client, message):
     db["sellers"][target_id] = seller_type
     save_db(db)
     await message.reply_text(f"✅ User `{target_id}` diangkat menjadi **{seller_type.upper()}**!")
-    
+            
