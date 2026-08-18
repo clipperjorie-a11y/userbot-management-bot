@@ -1,17 +1,11 @@
 import asyncio
-from bot import app as bot_app
 from userbot import timer_task
 
 async def main():
-    print("🚀 Running Bot Controller & Engine Userbot...")
+    print("🚀 Running Userbot Bot Controller & Engine...")
     # Jalankan tugas latar belakang userbot
-    asyncio.create_task(timer_task())
-    # Jalankan bot controller utama
-    await bot_app.start()
-    print("✅ Bot Controller Berhasil Menyala!")
-    # Jaga agar bot tetap berjalan
-    await asyncio.Event().wait()
+    await timer_task()
 
 if __name__ == "__main__":
-    bot_app.run()
-    
+    asyncio.run(main())
+
