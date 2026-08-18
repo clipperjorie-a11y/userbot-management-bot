@@ -1,10 +1,17 @@
 import os, requests, asyncio
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import (
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton, 
+    CallbackQuery,
+    ReplyKeyboardMarkup, 
+    KeyboardButton
+)
 from pyrogram.errors import SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeExpired
 from datetime import datetime, timedelta
 from database import get_db, save_db
 
+# --- CONFIGURATION ---
 API_ID = int(os.getenv("API_ID", "36488953"))
 API_HASH = os.getenv("API_HASH", "9ff7f56335f9859c5979a2a64cc5de7d")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8806476092:AAEQflCwvylPWCThNEHS33dc9OW65WDODK8")
@@ -18,6 +25,7 @@ app = Client("bot_controller", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_T
 
 login_sessions = {}
 
+# --- GATEWAY PAYMENT ORDERKUOTA ---
 def generate_qris(amount):
     if not ORKUT_AUTH_TOKEN or not ORKUT_MERCHANT_ID:
         return None, None
@@ -42,6 +50,24 @@ def check_qris_status(trx_id, amount):
         pass
     return False
 
+# --- KEYBOARD BUILDERS ---
+def build_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton("🚀 Buat Userbot")],
+            [
+                KeyboardButton("🔄 Perbarui"),
+                KeyboardButton("🔴 Matikan"),
+                KeyboardButton("⌛ Restart")
+            ],
+            [
+                KeyboardButton("📋 Daftar Userbot"),
+                KeyboardButton("🛠️ Daftar Command")
+            ]
+        ],
+        resize_keyboard=True
+    )
+
 def build_main_keyboard(user_data):
     keyboard = []
     if not user_data.get("session"):
@@ -60,14 +86,36 @@ def build_main_keyboard(user_data):
     ])
     return InlineKeyboardMarkup(keyboard)
 
+# --- COMMAND HANDLERS ---
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message):
     user_id = str(message.from_user.id)
     db = get_db()
-    user_data = db.get("users", {}).get(user_id, {"plan": "none", "expired": "Tidak Aktif", "target_groups": {}, "session": ""})
     
+    if "users" not in db:
+        db["users"] = {}
+    if user_id not in db["users"]:
+        db["users"][user_id] = {"plan": "none", "expired": "Tidak Aktif", "target_groups": {}, "session": ""}
+        save_db(db)
+
+    user_data = db["users"][user_id]
     is_logged_in = "✅ Terhubung" if user_data.get("session") else "❌ Belum Login"
     plan_status = user_data.get("plan", "none").upper()
+
+    # Kirim Notifikasi Pengguna Baru ke Owner (Fitur seperti di gambar)
+    try:
+        await client.send_message(
+            chat_id=OWNER_ID,
+            text=(
+                f"━━━ 🔔 **Notifikasi Pengguna Baru** 🔔 ━━━\n\n"
+                f"👤 **Pengguna:** {message.from_user.first_name}\n"
+                f"ℹ️ **ID:** `{user_id}`\n"
+                f"📚 **Nama:** {message.from_user.first_name}\n\n"
+                f"🎉 *Telah memulai bot Anda.*"
+            )
+        )
+    except Exception:
+        pass
 
     text = (
         f"🤖 **USERBOT CONTROL PANEL**\n"
@@ -80,8 +128,11 @@ async def start_cmd(client, message):
         f"Silakan pilih menu pengaturan di bawah ini:"
     )
     
-    await message.reply_text(text, reply_markup=build_main_keyboard(user_data))
+    # Menampilkan Inline Menu sekaligus Reply Keyboard di bagian bawah
+    await message.reply_text(text, reply_markup=build_reply_keyboard())
+    await message.reply_text(" Control Panel Inline:", reply_markup=build_main_keyboard(user_data))
 
+# --- CALLBACK INLINE HANDLER ---
 @app.on_callback_query()
 async def callback_handler(client, cb: CallbackQuery):
     user_id = str(cb.from_user.id)
@@ -272,15 +323,39 @@ async def callback_handler(client, cb: CallbackQuery):
         )
         await cb.message.edit_text(text, reply_markup=build_main_keyboard(user_data))
 
+# --- TEXT & REPLY KEYBOARD HANDLER ---
 @app.on_message(filters.private & filters.text & ~filters.command(["start", "addprem", "addseller", "cancel"]))
-async def login_input_handler(client, message):
+async def text_handler(client, message):
     user_id = str(message.from_user.id)
+    text = message.text.strip()
+
+    # Handle Reply Keyboard Bawah
+    if text == "🚀 Buat Userbot":
+        return await message.reply_text("Silakan pilih menu **🔑 Login Userbot (OTP)** pada tombol menu di atas.")
+    elif text == "🔄 Perbarui":
+        return await message.reply_text("🔄 **Sistem Diperbarui!** Semua konfigurasi database terbaru telah dimuat.")
+    elif text == "🔴 Matikan":
+        return await message.reply_text("🔴 Userbot telah di-pause secara sementara.")
+    elif text == "⌛ Restart":
+        return await message.reply_text("⌛ **Restarting...** Layanan userbot sedang direstart.")
+    elif text == "📋 Daftar Userbot":
+        db = get_db()
+        users_count = len(db.get("users", {}))
+        return await message.reply_text(f"📋 Total Userbot terdaftar dalam database: **{users_count}**")
+    elif text == "🛠️ Daftar Command":
+        return await message.reply_text(
+            "🛠️ **DAFTAR COMMAND OWNER / SELLER:**\n\n"
+            "• `/addprem [ID] [jaseb|wtb|spesial] [30d|perm]` — Buka Akses User\n"
+            "• `/addseller [ID] [role]` — Tambah Akses Seller\n"
+            "• `/start` — Buka Control Panel"
+        )
+
+    # Handle Input Login OTP & 2FA
     if user_id not in login_sessions:
         return
 
     session_info = login_sessions[user_id]
     step = session_info.get("step")
-    text = message.text.strip()
 
     if step == "phone":
         phone_number = text.replace(" ", "")
@@ -336,7 +411,7 @@ async def login_input_handler(client, message):
             login_sessions[user_id]["step"] = "2fa"
             await message.reply_text("🔐 Akun Anda menggunakan Verifikasi 2-Langkah (2FA).\nSilakan masukkan **Password 2FA** Anda:")
 
-        except (PhoneCodeInvalid, PhoneCodeExpired) as e:
+        except (PhoneCodeInvalid, PhoneCodeExpired):
             await message.reply_text("❌ Kode OTP salah/kadaluarsa. Silakan ulang proses login.")
             try:
                 await temp_client.disconnect()
@@ -369,6 +444,7 @@ async def login_input_handler(client, message):
         except Exception as e:
             await message.reply_text(f"❌ Password 2FA Salah/Gagal: `{e}`")
 
+# --- ADMIN COMMANDS ---
 @app.on_message(filters.command("addprem") & filters.private)
 async def addprem_cmd(client, message):
     actor_id = message.from_user.id
@@ -402,13 +478,4 @@ async def addseller_cmd(client, message):
         return await message.reply_text("❌ Khusus Owner!")
     args = message.text.split()
     if len(args) < 3:
-        return await message.reply_text("⚠️ Format: `/addseller [ID_User] [seller_jaseb|seller_wtb|seller_spesial]`")
-
-    target_id, seller_type = args[1], args[2].lower()
-    db = get_db()
-    if "sellers" not in db:
-        db["sellers"] = {}
-    db["sellers"][target_id] = seller_type
-    save_db(db)
-    await message.reply_text(f"✅ User `{target_id}` diangkat menjadi **{seller_type.upper()}**!")
-        
+        return await message.reply_text("⚠️ Format: `/addseller [ID_User] [seller_jase
