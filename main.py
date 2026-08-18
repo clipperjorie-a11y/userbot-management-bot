@@ -3,13 +3,15 @@ from bot import app as bot_app
 from userbot import timer_task
 
 async def main():
-    print("🚀 Running Bot Controller & Engine Userbot (Multi-Client OTP Mode)...")
-    await asyncio.gather(
-        bot_app.start(),
-        timer_task()
-    )
+    print("🚀 Running Bot Controller & Engine Userbot...")
+    # Jalankan tugas latar belakang userbot
+    asyncio.create_task(timer_task())
+    # Jalankan bot controller utama
+    await bot_app.start()
+    print("✅ Bot Controller Berhasil Menyala!")
+    # Jaga agar bot tetap berjalan
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    bot_app.run()
     
