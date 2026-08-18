@@ -9,7 +9,6 @@ API_HASH = os.getenv("API_HASH", "9ff7f56335f9859c5979a2a64cc5de7d")
 active_clients = {}
 
 async def global_message_handler(client, message):
-    """Satu handler global yang aman digunakan oleh seluruh client tanpa memicu dekorator ganda"""
     try:
         user_id = getattr(client, "custom_user_id", None)
         if not user_id:
