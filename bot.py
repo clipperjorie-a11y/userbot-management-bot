@@ -33,7 +33,7 @@ def generate_qris(amount):
 async def start_cmd(client, message):
     user_id = str(message.from_user.id)
     db = get_db()
-    user_data = db["users"].get(user_id, {"plan": "none", "expired": "Tidak Aktif", "target_groups": {}, "session": ""})
+    user_data = db.get("users", {}).get(user_id, {"plan": "none", "expired": "Tidak Aktif", "target_groups": {}, "session": ""})
     
     is_logged_in = "✅ Terhubung" if user_data.get("session") else "❌ Belum Login"
 
@@ -41,7 +41,7 @@ async def start_cmd(client, message):
         f"🤖 **Userbot Control Panel**\n\n"
         f"🆔 **ID Anda:** `{user_id}`\n"
         f"📱 **Status Akun:** **{is_logged_in}**\n"
-        f"📦 **Status Paket:** **{user_data['plan'].upper()}**\n"
+        f"📦 **Status Paket:** **{user_data.get('plan', 'none').upper()}**\n"
         f"⏳ **Masa Aktif:** `{user_data.get('expired', 'Tidak Aktif')}`\n\n"
         f"Kelola akun dan fitur userbot Anda di bawah ini:"
     )
@@ -52,9 +52,9 @@ async def start_cmd(client, message):
     else:
         keyboard.append([InlineKeyboardButton("🚪 Logout Akun Userbot", callback_data="logout_ubot")])
 
-    if user_data["plan"] in ["jaseb", "spesial"]:
+    if user_data.get("plan") in ["jaseb", "spesial"]:
         keyboard.append([InlineKeyboardButton("📢 Setting Grup Jaseb", callback_data="menu_groups")])
-    if user_data["plan"] in ["wtb", "spesial"]:
+    if user_data.get("plan") in ["wtb", "spesial"]:
         keyboard.append([InlineKeyboardButton("🎯 Setting Grup WTB", callback_data="menu_groups")])
     
     keyboard.append([InlineKeyboardButton("💳 Beli Paket (Payment QRIS)", callback_data="buy_menu")])
@@ -66,7 +66,7 @@ async def callback_handler(client, cb: CallbackQuery):
     user_id = str(cb.from_user.id)
     data = cb.data
     db = get_db()
-    user_data = db["users"].get(user_id, {"plan": "none", "target_groups": {}})
+    user_data = db.get("users", {}).get(user_id, {"plan": "none", "target_groups": {}})
 
     if data == "login_otp":
         if user_data.get("plan") == "none":
@@ -80,8 +80,9 @@ async def callback_handler(client, cb: CallbackQuery):
         )
 
     elif data == "logout_ubot":
-        db["users"][user_id]["session"] = ""
-        save_db(db)
+        if user_id in db.get("users", {}):
+            db["users"][user_id]["session"] = ""
+            save_db(db)
         await cb.answer("✅ Berhasil Logout dari akun Userbot!", show_alert=True)
         await start_cmd(client, cb.message)
 
@@ -136,7 +137,7 @@ async def callback_handler(client, cb: CallbackQuery):
             target_dict[chat_id]["active"] = not current_status
             db["users"][user_id]["target_groups"] = target_dict
             save_db(db)
-            await cb.answer(f"Status grup diperbarui!", show_alert=True)
+            await cb.answer("Status grup diperbarui!", show_alert=True)
             await callback_handler(client, cb)
 
     elif data == "back_main":
@@ -170,7 +171,10 @@ async def login_input_handler(client, message):
                 "⚠️ **Sangat Penting:** Kirim kode dengan format berjarak/spasi (contoh: jika kode `12345`, kirimkan: `1 2 3 4 5`)."
             )
         except Exception as e:
-            await temp_client.disconnect()
+            try:
+                await temp_client.disconnect()
+            except Exception:
+                pass
             del login_sessions[user_id]
             await message.reply_text(f"❌ Gagal mengirim OTP: `{e}`\nSilakan coba klik menu Login lagi.")
 
@@ -186,6 +190,8 @@ async def login_input_handler(client, message):
             await temp_client.disconnect()
 
             db = get_db()
+            if "users" not in db:
+                db["users"] = {}
             if user_id not in db["users"]:
                 db["users"][user_id] = {"plan": "none", "expired": "Tidak Aktif", "target_groups": {}}
             
@@ -201,11 +207,17 @@ async def login_input_handler(client, message):
 
         except (PhoneCodeInvalid, PhoneCodeExpired) as e:
             await message.reply_text("❌ Kode OTP salah atau kadaluarsa. Silakan ulang proses login dari menu /start.")
-            await temp_client.disconnect()
+            try:
+                await temp_client.disconnect()
+            except Exception:
+                pass
             del login_sessions[user_id]
 
         except Exception as e:
-            await temp_client.disconnect()
+            try:
+                await temp_client.disconnect()
+            except Exception:
+                pass
             del login_sessions[user_id]
             await message.reply_text(f"❌ Terjadi kesalahan: `{e}`")
 
@@ -236,13 +248,15 @@ async def addprem_cmd(client, message):
     target_id, plan, duration = args[1], args[2].lower(), args[3].lower()
     db = get_db()
     is_owner = (actor_id == OWNER_ID)
-    seller_role = db["sellers"].get(str(actor_id))
+    seller_role = db.get("sellers", {}).get(str(actor_id))
 
     if not is_owner and not seller_role:
         return await message.reply_text("❌ Akses ditolak! Anda bukan Seller atau Owner.")
 
     exp_date = (datetime.now() + timedelta(days=180 if duration in ["perm", "permanen"] else int(''.join(filter(str.isdigit, duration)) or 30))).strftime("%Y-%m-%d")
     
+    if "users" not in db:
+        db["users"] = {}
     if target_id not in db["users"]:
         db["users"][target_id] = {"target_groups": {}, "session": ""}
         
@@ -261,6 +275,8 @@ async def addseller_cmd(client, message):
 
     target_id, seller_type = args[1], args[2].lower()
     db = get_db()
+    if "sellers" not in db:
+        db["sellers"] = {}
     db["sellers"][target_id] = seller_type
     save_db(db)
     await message.reply_text(f"✅ User `{target_id}` diangkat menjadi **{seller_type.upper()}**!")
