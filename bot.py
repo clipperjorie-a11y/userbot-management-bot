@@ -13,11 +13,9 @@ from pyrogram.errors import (
 )
 from database import get_db, save_db
 
-# Aktifkan logging agar aktivitas bot terlihat di terminal/console
 logging.basicConfig(level=logging.INFO)
 
 # --- CONFIGURATION ---
-# Ambil dari environment variable atau gunakan nilai default jika tidak diset
 API_ID = int(os.getenv("API_ID", "36488953"))
 API_HASH = os.getenv("API_HASH", "9ff7f56335f9859c5979a2a64cc5de7d")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8806476092:AAEQflCwvylPWCThNEHS33dc9OW65WDODK8")
@@ -25,9 +23,51 @@ OWNER_ID = int(os.getenv("OWNER_ID", "7193478617"))
 
 app = Client("bot_controller", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Penyimpanan sementara dalam memori (RAM)
 login_sessions = {}
 user_states = {}
+
+# --- HELPER DATABASE INIT ---
+def init_user_db(db, user_id):
+    if "users" not in db:
+        db["users"] = {}
+    if user_id not in db["users"]:
+        db["users"][user_id] = {
+            "plan": "none",
+            "expired": "Tidak Aktif",
+            "session": "",
+            "settings": {
+                "bc_text": "",
+                "bc_delay": 5,           # Delay antar kirim per grup (detik)
+                "bc_interval": 30,       # Jeda per putaran/siklus (menit)
+                "bc_targets": [],        # List ID / Username grup target BC
+                
+                "forward_msg_link": "", # Link pesan / ID pesan asal
+                "forward_delay": 5,      # Delay antar forward (detik)
+                "forward_interval": 30,  # Jeda per putaran (menit)
+                "forward_targets": [],   # List ID / Username grup target Forward
+                
+                "replay_keyword": "",    # Keyword penyergap WTB
+                "replay_banword": "",    # Kata yang dilarang (blacklist)
+                "replay_text": "",       # Pesan balasan otomatis
+                "replay_cooldown": 10    # Delay aman per rebalas (detik)
+            }
+        }
+    else:
+        # Pengecekan skema lama ke baru agar tidak error jika key belum ada
+        st = db["users"][user_id].setdefault("settings", {})
+        st.setdefault("bc_text", "")
+        st.setdefault("bc_delay", 5)
+        st.setdefault("bc_interval", 30)
+        st.setdefault("bc_targets", [])
+        st.setdefault("forward_msg_link", "")
+        st.setdefault("forward_delay", 5)
+        st.setdefault("forward_interval", 30)
+        st.setdefault("forward_targets", [])
+        st.setdefault("replay_keyword", "")
+        st.setdefault("replay_banword", "")
+        st.setdefault("replay_text", "")
+        st.setdefault("replay_cooldown", 10)
+    save_db(db)
 
 # --- KEYBOARD MAIN MENU ---
 def build_reply_keyboard(user_id):
@@ -41,7 +81,6 @@ def build_reply_keyboard(user_id):
         [KeyboardButton("📚 Panduan Buat"), KeyboardButton("🎁 Coba Gratis")]
     ]
     
-    # Menu Tambahan untuk Owner / Reseller
     if int(user_id) == OWNER_ID or "seller" in str(plan):
         buttons.append([KeyboardButton("👑 Panel Akses (Owner/Seller)")])
         
@@ -52,28 +91,11 @@ def build_reply_keyboard(user_id):
 async def start_cmd(client, message):
     user_id = str(message.from_user.id)
     db = get_db()
-    
-    if "users" not in db: 
-        db["users"] = {}
-        
-    if user_id not in db["users"]:
-        db["users"][user_id] = {
-            "plan": "none",
-            "expired": "Tidak Aktif",
-            "session": "",
-            "settings": {
-                "bc_text": "",
-                "bc_delay": 60,
-                "replay_keyword": "",
-                "replay_text": "",
-                "forward_target": ""
-            }
-        }
-        save_db(db)
+    init_user_db(db, user_id)
 
     text = (
-        "Selamat datang di **USERBOT JASEB OTOMATIS & AUTOREPLAY**!\n\n"
-        "Gunakan menu tombol di bawah untuk mengelola Userbot kamu."
+        "Selamat datang di **USERBOT JASEB & SMART AUTO REPLAY**!\n\n"
+        "Gunakan menu tombol di bawah untuk mengelola dan mengonfigurasi Userbot kamu."
     )
     await message.reply_text(text, reply_markup=build_reply_keyboard(user_id))
 
@@ -111,9 +133,7 @@ async def addprem_cmd(client, message):
 
     exp_date = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     
-    if "users" not in db: db["users"] = {}
-    if target_id not in db["users"]: db["users"][target_id] = {"settings": {}}
-
+    init_user_db(db, target_id)
     db["users"][target_id]["plan"] = paket
     db["users"][target_id]["expired"] = exp_date
     save_db(db)
@@ -132,18 +152,16 @@ async def main_handler(client, message):
     user_id = str(message.from_user.id)
     text = message.text
     db = get_db()
-    if "users" not in db: db["users"] = {}
-    user_data = db.get("users", {}).get(user_id, {})
+    init_user_db(db, user_id)
+    
+    user_data = db["users"][user_id]
     plan = user_data.get("plan", "none")
 
-    # -------------------------------------------------------------
-    # 1. ALUR LOGIN TELEGRAM (Nomor HP -> OTP -> Password 2FA)
-    # -------------------------------------------------------------
+    # 1. ALUR LOGIN TELEGRAM
     if user_id in login_sessions:
         session_info = login_sessions[user_id]
         step = session_info.get("step")
 
-        # Step A: Terima Nomor Telepon
         if step == "phone":
             phone_number = text.replace(" ", "").replace("-", "")
             temp_client = Client(f"temp_{user_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
@@ -158,19 +176,17 @@ async def main_handler(client, message):
                 }
                 return await message.reply_text(
                     "📩 Kode OTP telah dikirim oleh Telegram!\n\n"
-                    "Silakan kirim kode OTP dengan **spasi di antara angkanya** agar tidak diblokir Telegram.\n"
-                    "Contoh jika kode `12345`, kirim: `1 2 3 4 5`"
+                    "Gunakan spasi di antara angkanya (Contoh jika `12345` -> `1 2 3 4 5`)."
                 )
             except PhoneNumberInvalid:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
-                return await message.reply_text("❌ Nomor telepon tidak valid! Silakan klik **🚀 Buat / Login Userbot** lagi.")
+                return await message.reply_text("❌ Nomor telepon tidak valid! Klik **🚀 Buat / Login Userbot** lagi.")
             except Exception as e:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
                 return await message.reply_text(f"❌ Terjadi kesalahan: `{e}`")
 
-        # Step B: Terima OTP
         elif step == "otp":
             otp_code = text.replace(" ", "").replace("-", "")
             temp_client = session_info["client"]
@@ -186,19 +202,18 @@ async def main_handler(client, message):
                 save_db(db)
                 del login_sessions[user_id]
 
-                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap digunakan dan diatur lewat Panel Control.")
+                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap dikontrol.")
 
             except SessionPasswordNeeded:
                 login_sessions[user_id]["step"] = "password"
-                return await message.reply_text("🔐 Akun kamu menggunakan Verifikasi 2-Langkah (2FA).\nSilakan kirim **Password 2FA** akun Telegram kamu:")
+                return await message.reply_text("🔐 Masukkan **Password 2FA** akun Telegram kamu:")
             except (PhoneCodeInvalid, PhoneCodeExpired):
-                return await message.reply_text("❌ Kode OTP salah atau expired. Coba masukkan lagi dengan benar:")
+                return await message.reply_text("❌ Kode OTP salah atau expired. Coba lagi:")
             except Exception as e:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
                 return await message.reply_text(f"❌ Gagal login: `{e}`")
 
-        # Step C: Terima Password 2FA
         elif step == "password":
             temp_client = session_info["client"]
             try:
@@ -210,56 +225,126 @@ async def main_handler(client, message):
                 save_db(db)
                 del login_sessions[user_id]
 
-                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap digunakan.")
+                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu siap digunakan.")
             except PasswordHashInvalid:
-                return await message.reply_text("❌ Password 2FA salah! Masukkan lagi password yang benar:")
+                return await message.reply_text("❌ Password 2FA salah! Coba masukkan lagi:")
             except Exception as e:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
                 return await message.reply_text(f"❌ Gagal login: `{e}`")
 
-    # -------------------------------------------------------------
-    # 2. ALUR SETTING (STATE INPUT USER)
-    # -------------------------------------------------------------
+    # 2. ALUR INPUT SETTINGAN FITUR (USER STATES)
     if user_id in user_states:
         state = user_states[user_id]
-        
+        st = db["users"][user_id]["settings"]
+
+        # AUTO BC STATES
         if state == "input_bc_text":
-            db["users"][user_id]["settings"]["bc_text"] = text
+            st["bc_text"] = text
             save_db(db)
             del user_states[user_id]
-            return await message.reply_text("✅ Pesan Auto BC berhasil disimpan!")
+            return await message.reply_text("✅ Teks Pesan Auto BC berhasil disimpan!")
 
+        elif state == "input_bc_delay":
+            if not text.isdigit(): return await message.reply_text("❌ Masukkan angka bulat (detik).")
+            st["bc_delay"] = int(text)
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text(f"✅ Delay kirim BC diset: `{text} detik`")
+
+        elif state == "input_bc_interval":
+            if not text.isdigit(): return await message.reply_text("❌ Masukkan angka bulat (menit).")
+            st["bc_interval"] = int(text)
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text(f"✅ Interval putaran BC diset: `{text} menit`")
+
+        elif state == "input_bc_add_target":
+            targets = [t.strip() for t in text.splitlines() if t.strip()]
+            added = 0
+            for t in targets:
+                if t not in st["bc_targets"]:
+                    st["bc_targets"].append(t)
+                    added += 1
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text(f"✅ Berhasil menambahkan `{added}` Grup Target BC baru!")
+
+        # AUTO FORWARD (FP) STATES
+        elif state == "input_fv_link":
+            st["forward_msg_link"] = text
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text("✅ Target Pesan / Link Forward berhasil disimpan!")
+
+        elif state == "input_fv_delay":
+            if not text.isdigit(): return await message.reply_text("❌ Masukkan angka (detik).")
+            st["forward_delay"] = int(text)
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text(f"✅ Delay Forward diset: `{text} detik`")
+
+        elif state == "input_fv_interval":
+            if not text.isdigit(): return await message.reply_text("❌ Masukkan angka (menit).")
+            st["forward_interval"] = int(text)
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text(f"✅ Interval Forward diset: `{text} menit`")
+
+        elif state == "input_fv_add_target":
+            targets = [t.strip() for t in text.splitlines() if t.strip()]
+            added = 0
+            for t in targets:
+                if t not in st["forward_targets"]:
+                    st["forward_targets"].append(t)
+                    added += 1
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text(f"✅ Berhasil menambahkan `{added}` Grup Target Forward baru!")
+
+        # AUTO REPLAY STATES
         elif state == "input_replay_kw":
-            db["users"][user_id]["settings"]["replay_keyword"] = text
-            user_states[user_id] = "input_replay_text"
-            return await message.reply_text("✅ Keyword disimpan!\n\nSekarang kirimkan **Pesan Balasan Otomatis** jika keyword tersebut terdeteksi:")
+            st["replay_keyword"] = text
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text("✅ Keyword Auto Replay berhasil disimpan!")
+
+        elif state == "input_replay_banword":
+            st["replay_banword"] = text
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text("✅ Banword (Blacklist Keyword) berhasil disimpan!")
 
         elif state == "input_replay_text":
-            db["users"][user_id]["settings"]["replay_text"] = text
+            st["replay_text"] = text
             save_db(db)
             del user_states[user_id]
-            return await message.reply_text("✅ Auto Replay berhasil dikonfigurasi dan aktif!")
+            return await message.reply_text("✅ Pesan Balasan Auto Replay berhasil disimpan!")
 
-    # -------------------------------------------------------------
-    # 3. TOMBOL MENU UTAMA (REPLY KEYBOARD)
-    # -------------------------------------------------------------
+        elif state == "input_replay_cooldown":
+            if not text.isdigit(): return await message.reply_text("❌ Masukkan angka (detik).")
+            st["replay_cooldown"] = int(text)
+            save_db(db)
+            del user_states[user_id]
+            return await message.reply_text(f"✅ Cooldown Auto Replay diset: `{text} detik`")
+
+    # 3. MAIN MENU BUTTONS
     if text == "⚙️ Panel Control Userbot":
         if plan == "none":
             return await message.reply_text("❌ Anda belum memiliki paket aktif.")
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Setting Auto BC", callback_data="set_bc"), InlineKeyboardButton("🔄 Setting Auto Forward", callback_data="set_fv")],
-            [InlineKeyboardButton("🤖 Setting Auto Replay (WTB)", callback_data="set_replay")],
-            [InlineKeyboardButton("📊 Status & Config Saat Ini", callback_data="view_config")]
+            [InlineKeyboardButton("📢 Setting Auto BC", callback_data="menu_bc"), InlineKeyboardButton("🔄 Setting Auto Forward", callback_data="menu_fv")],
+            [InlineKeyboardButton("⚡ Setting Auto Replay (WTB)", callback_data="menu_replay")],
+            [InlineKeyboardButton("📊 Status Config Saat Ini", callback_data="view_config")]
         ])
-        return await message.reply_text("⚙️ **PANEL KONTROL USERBOT**\n\nSilakan pilih fitur yang ingin Anda atur:", reply_markup=keyboard)
+        return await message.reply_text("⚙️ **PANEL KONTROL USERBOT**\n\nPilih fitur yang ingin Anda kelola:", reply_markup=keyboard)
 
     elif text == "🚀 Buat / Login Userbot":
         if plan == "none":
             return await message.reply_text("❌ Silakan beli paket atau klaim trial gratis dulu.")
         login_sessions[user_id] = {"step": "phone"}
-        return await message.reply_text("📱 Kirimkan Nomor HP Telegram Anda beserta kode negara (Contoh: `+628123456789`):")
+        return await message.reply_text("📱 Kirimkan Nomor HP Telegram Anda (Contoh: `+628123456789`):")
 
     elif text == "🎁 Coba Gratis":
         if user_data.get("claimed_trial"):
@@ -273,41 +358,74 @@ async def main_handler(client, message):
 
     elif text == "💡 Fitur Unggulan":
         return await message.reply_text(
-            "🔥 **KEUNGGULAN USERBOT JASEB & AUTO REPLAY** 🔥\n\n"
-            "📢 **Auto BC & Forward Super Cepat**\n*Promosi ke ribuan grup LPM secara otomatis.*\n\n"
-            "⚡ **Auto Replay WTB / Keyword Smart System**\n*Penyergap pesan paling cerdas! Tangkap pesan calon pembeli di grup secara otomatis.*"
+            "🔥 **FITUR UNGGULAN USERBOT JASEB & AUTO REPLAY** 🔥\n\n"
+            "📢 **Auto BC & Auto Forward Smart System**\n"
+            "• Atur Delay per pesan & Interval per siklus/putaran.\n"
+            "• Custom daftar grup target sesuka hati.\n\n"
+            "⚡ **Smart Auto Replay WTB**\n"
+            "• **Keyword Target:** Tangkap pesan pembeli secara otomatis.\n"
+            "• **Banword Filter:** Hindari salah balas pesan/promosi lawan.\n"
+            "• **Anti-Spam Cooldown:** Aman dari batasan Telegram."
         )
 
-# --- CALLBACK QUERY HANDLER (INLINE BUTTONS) ---
+# --- CALLBACK QUERY HANDLER (INLINE NAVIGATION) ---
 @app.on_callback_query()
 async def cb_handler(client, cb: CallbackQuery):
     user_id = str(cb.from_user.id)
     db = get_db()
-    user_settings = db.get("users", {}).get(user_id, {}).get("settings", {})
+    init_user_db(db, user_id)
+    st = db["users"][user_id]["settings"]
+    data = cb.data
 
-    if cb.data == "set_bc":
+    # --- MAIN SUB-MENUS ---
+    if data == "menu_bc":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Set Teks BC", callback_data="set_bc_text"), InlineKeyboardButton("➕ Tambah Target Grup", callback_data="add_bc_target")],
+            [InlineKeyboardButton("⏱️ Set Delay (Detik)", callback_data="set_bc_delay"), InlineKeyboardButton("🔄 Set Interval (Menit)", callback_data="set_bc_interval")],
+            [InlineKeyboardButton("📋 Lihat Target Grup", callback_data="list_bc_target"), InlineKeyboardButton("🗑️ Clear Target", callback_data="clear_bc_target")],
+            [InlineKeyboardButton("⬅️ Kembali", callback_data="menu_main")]
+        ])
+        await cb.message.edit_text("📢 **PANEL PENGATURAN AUTO BC**\n\nSilakan atur parameter broadcast kamu di bawah ini:", reply_markup=keyboard)
+
+    elif data == "menu_fv":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 Set Target/Link Forward", callback_data="set_fv_link"), InlineKeyboardButton("➕ Tambah Target Grup", callback_data="add_fv_target")],
+            [InlineKeyboardButton("⏱️ Set Delay (Detik)", callback_data="set_fv_delay"), InlineKeyboardButton("🔄 Set Interval (Menit)", callback_data="set_fv_interval")],
+            [InlineKeyboardButton("📋 Lihat Target Grup", callback_data="list_fv_target"), InlineKeyboardButton("🗑️ Clear Target", callback_data="clear_fv_target")],
+            [InlineKeyboardButton("⬅️ Kembali", callback_data="menu_main")]
+        ])
+        await cb.message.edit_text("🔄 **PANEL PENGATURAN AUTO FORWARD (FP)**\n\nSilakan atur parameter auto forward kamu di bawah ini:", reply_markup=keyboard)
+
+    elif data == "menu_replay":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔑 Set Keyword WTB", callback_data="set_rp_kw"), InlineKeyboardButton("🚫 Set Banword Filter", callback_data="set_rp_ban")],
+            [InlineKeyboardButton("💬 Set Pesan Balasan", callback_data="set_rp_text"), InlineKeyboardButton("⏱️ Set Cooldown Delay", callback_data="set_rp_cd")],
+            [InlineKeyboardButton("⬅️ Kembali", callback_data="menu_main")]
+        ])
+        await cb.message.edit_text("⚡ **PANEL AUTO REPLAY WTB (SMART SYSTEM)**\n\nAtur keyword, pesan balasan, serta filter kata terlarang (banword) di sini:", reply_markup=keyboard)
+
+    elif data == "menu_main":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Setting Auto BC", callback_data="menu_bc"), InlineKeyboardButton("🔄 Setting Auto Forward", callback_data="menu_fv")],
+            [InlineKeyboardButton("⚡ Setting Auto Replay (WTB)", callback_data="menu_replay")],
+            [InlineKeyboardButton("📊 Status Config Saat Ini", callback_data="view_config")]
+        ])
+        await cb.message.edit_text("⚙️ **PANEL KONTROL USERBOT**\n\nPilih fitur yang ingin Anda kelola:", reply_markup=keyboard)
+
+    # --- AUTO BC TRIGGERS ---
+    elif data == "set_bc_text":
         user_states[user_id] = "input_bc_text"
-        await cb.message.reply_text("📝 **SETTING AUTO BC**\n\nSilakan kirimkan Teks/Pesan Promosi yang ingin di-Broadcast secara otomatis:")
-        await cb.answer()
-
-    elif cb.data == "set_replay":
-        user_states[user_id] = "input_replay_kw"
-        await cb.message.reply_text("🤖 **SETTING AUTO REPLAY (WTB)**\n\nKirimkan **Kata Kunci / Keyword** yang ingin ditangkap (pisahkan dengan koma).\nContoh: `wtb, cari, butuh, buy`")
-        await cb.answer()
-
-    elif cb.data == "view_config":
-        bc_msg = user_settings.get("bc_text", "Belum Diatur")
-        kw = user_settings.get("replay_keyword", "Belum Diatur")
-        rp_msg = user_settings.get("replay_text", "Belum Diatur")
-        
-        await cb.message.reply_text(
-            f"📊 **KONFIGURASI USERBOT SAAT INI:**\n\n"
-            f"📢 **Pesan Auto BC:**\n`{bc_msg}`\n\n"
-            f"🔑 **Keyword Auto Replay:** `{kw}`\n"
-            f"💬 **Balasan Auto Replay:** `{rp_msg}`"
-        )
-        await cb.answer()
-
-if __name__ == "__main__":
-    app.run()
-    
+        await cb.message.reply_text("📝 **SETTING TEKS BC**\n\nKirimkan Teks / Pesan Promosi yang ingin di-Broadcast:")
+    elif data == "set_bc_delay":
+        user_states[user_id] = "input_bc_delay"
+        await cb.message.reply_text("⏱️ **SETTING DELAY KIRIM BC**\n\nKirimkan angka **delay per pesan/grup** (dalam detik).\nContoh: `5`")
+    elif data == "set_bc_interval":
+        user_states[user_id] = "input_bc_interval"
+        await cb.message.reply_text("🔄 **SETTING INTERVAL PUTARAN BC**\n\nKirimkan angka **jeda antar putaran BC** (dalam menit).\nContoh: `30`")
+    elif data == "add_bc_target":
+        user_states[user_id] = "input_bc_add_target"
+        await cb.message.reply_text("➕ **TAMBAH TARGET GRUP BC**\n\nKirimkan ID atau Username grup (bisa banyak pisahkan dengan garis baru/enter):\n\nContoh:\n`@grup_lpm1`\n`@grup_lpm2`\n`-100123456789`")
+    elif data == "list_bc_target":
+        targets = st.get("bc_targets", [])
+        list_str = "\n".join([f"• `{t}`" for t in targets]) if targets else "Belum ada grup yang ditambahkan."
+        await cb.message.reply_text(f"📋 **DAFTAR GRUP
