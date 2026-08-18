@@ -1,4 +1,6 @@
-import os, requests, asyncio
+import os
+import asyncio
+from datetime import datetime, timedelta
 from pyrogram import Client, filters
 from pyrogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
@@ -6,22 +8,22 @@ from pyrogram.types import (
 )
 from pyrogram.errors import (
     SessionPasswordNeeded, PhoneCodeInvalid,
-    PhoneCodeExpired, PasswordHashInvalid
+    PhoneCodeExpired, PasswordHashInvalid, PhoneNumberInvalid
 )
-from datetime import datetime, timedelta
 from database import get_db, save_db
 
 # --- CONFIGURATION ---
+# Gunakan Environment Variables untuk keamanan!
 API_ID = int(os.getenv("API_ID", "36488953"))
-API_HASH = os.getenv("API_HASH", "9ff7f56335f9859c5979a2a64cc5de7d")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8806476092:AAEQflCwvylPWCThNEHS33dc9OW65WDODK8")
+API_HASH = os.getenv("API_HASH", "ISI_API_HASH_BARU_DI_SINI")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "ISI_BOT_TOKEN_BARU_DI_SINI")
 OWNER_ID = int(os.getenv("OWNER_ID", "7193478617"))
-CS_USERNAME = os.getenv("CS_USERNAME", "cThatchers")
 
 app = Client("bot_controller", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# Penyimpanan sementara untuk sesi login & state input
 login_sessions = {}
-user_states = {} # Untuk menangkap input setting pesan/keyword
+user_states = {}
 
 # --- KEYBOARD MAIN MENU ---
 def build_reply_keyboard(user_id):
@@ -35,7 +37,6 @@ def build_reply_keyboard(user_id):
         [KeyboardButton("📚 Panduan Buat"), KeyboardButton("🎁 Coba Gratis")]
     ]
     
-    # Tambahkan menu khusus jika user adalah Owner / Reseller
     if int(user_id) == OWNER_ID or "seller" in plan:
         buttons.append([KeyboardButton("👑 Panel Akses (Owner/Seller)")])
         
@@ -68,16 +69,13 @@ async def start_cmd(client, message):
     )
     await message.reply_text(text, reply_markup=build_reply_keyboard(user_id))
 
-# --- SYSTEM MANAGEMENT AKSES (OWNER & RESELLER) ---
-# Format Owner: /addprem [USER_ID] [PAKET] [HARI]
-# Paket: basic | replay | spesial | reseller_basic | reseller_spesial
+# --- COMMAND /ADDPREM (OWNER/SELLER) ---
 @app.on_message(filters.command("addprem") & filters.private)
 async def addprem_cmd(client, message):
     user_id = str(message.from_user.id)
     db = get_db()
     sender_plan = db.get("users", {}).get(user_id, {}).get("plan", "none")
 
-    # Cek Wewenang
     if message.from_user.id != OWNER_ID and "seller" not in sender_plan:
         return await message.reply_text("❌ Anda tidak memiliki akses untuk memberikan paket.")
 
@@ -86,13 +84,7 @@ async def addprem_cmd(client, message):
         return await message.reply_text(
             "⚠️ **FORMAT SALAH**\n\n"
             "Gunakan format:\n"
-            "`/addprem [USER_ID] [PAKET] [HARI]`\n\n"
-            "**Pilihan Paket:**\n"
-            "• `basic` (Auto BC + Forward)\n"
-            "• `replay` (Auto Replay/WTB)\n"
-            "• `spesial` (Semua Fitur)\n"
-            "• `reseller_basic` (Akses Seller)\n"
-            "• `reseller_spesial` (Akses Seller Full)"
+            "`/addprem [USER_ID] [PAKET] [HARI]`"
         )
 
     target_id = str(args[1])
@@ -100,7 +92,7 @@ async def addprem_cmd(client, message):
     
     try:
         days = int(args[3])
-    except:
+    except ValueError:
         return await message.reply_text("❌ Jumlah hari harus berupa angka.")
 
     valid_plans = ["basic", "replay", "spesial", "reseller_basic", "reseller_spesial"]
@@ -120,34 +112,105 @@ async def addprem_cmd(client, message):
         f"✅ **AKSES BERHASIL DIBERIKAN!**\n\n"
         f"• Target ID: `{target_id}`\n"
         f"• Jenis Paket: `{paket.upper()}`\n"
-        f"• Durasi: `{days} Hari`\n"
         f"• Expired: `{exp_date}`"
     )
 
-# --- PANEL CONTROL USERBOT (SETTING FITUR) ---
+# --- MAIN TEXT HANDLER ---
 @app.on_message(filters.private & filters.text & ~filters.command(["start", "addprem"]))
 async def main_handler(client, message):
     user_id = str(message.from_user.id)
     text = message.text
     db = get_db()
     if "users" not in db: db["users"] = {}
-    
     user_data = db.get("users", {}).get(user_id, {})
     plan = user_data.get("plan", "none")
 
-    # 1. PANEL CONTROL (Pengaturan Fitur Userbot)
-    if text == "⚙️ Panel Control Userbot":
-        if plan == "none":
-            return await message.reply_text("❌ Anda belum memiliki paket aktif.")
+    # -------------------------------------------------------------
+    # 1. HANDLE ALUR LOGIN TELEGRAM (Nomor HP -> OTP -> Password)
+    # -------------------------------------------------------------
+    if user_id in login_sessions:
+        session_info = login_sessions[user_id]
+        step = session_info.get("step")
 
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Setting Auto BC", callback_data="set_bc"), InlineKeyboardButton("🔄 Setting Auto Forward", callback_data="set_fv")],
-            [InlineKeyboardButton("🤖 Setting Auto Replay (WTB)", callback_data="set_replay")],
-            [InlineKeyboardButton("📊 Status & Config Saat Ini", callback_data="view_config")]
-        ])
-        return await message.reply_text("⚙️ **PANEL KONTROL USERBOT**\n\nSilakan pilih fitur yang ingin Anda atur:", reply_markup=keyboard)
+        # Step 1: Menerima Nomor Telepon
+        if step == "phone":
+            phone_number = text.replace(" ", "").replace("-", "")
+            temp_client = Client(f"temp_{user_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
+            await temp_client.connect()
+            try:
+                code_info = await temp_client.send_code(phone_number)
+                login_sessions[user_id] = {
+                    "step": "otp",
+                    "client": temp_client,
+                    "phone": phone_number,
+                    "phone_code_hash": code_info.phone_code_hash
+                }
+                return await message.reply_text(
+                    "📩 Kode OTP telah dikirim oleh Telegram!\n\n"
+                    "Silakan kirim kode OTP dengan format spasi di tengahnya agar tidak diblokir Telegram.\n"
+                    "Contoh jika kode `12345`, kirim: `1 2 3 4 5`"
+                )
+            except PhoneNumberInvalid:
+                await temp_client.disconnect()
+                del login_sessions[user_id]
+                return await message.reply_text("❌ Nomor telepon tidak valid! Klik **🚀 Buat / Login Userbot** lagi.")
+            except Exception as e:
+                await temp_client.disconnect()
+                del login_sessions[user_id]
+                return await message.reply_text(f"❌ Terjadi kesalahan: `{e}`")
 
-    # 2. PROSES INPUT SETTINGAN (STATE HANDLER)
+        # Step 2: Menerima Kode OTP
+        elif step == "otp":
+            otp_code = text.replace(" ", "").replace("-", "")
+            temp_client = session_info["client"]
+            phone = session_info["phone"]
+            hash_code = session_info["phone_code_hash"]
+
+            try:
+                await temp_client.sign_in(phone, hash_code, otp_code)
+                session_string = await temp_client.export_session_string()
+                await temp_client.disconnect()
+
+                # Simpan Session String ke DB
+                db["users"][user_id]["session"] = session_string
+                save_db(db)
+                del login_sessions[user_id]
+
+                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap digunakan.")
+
+            except SessionPasswordNeeded:
+                login_sessions[user_id]["step"] = "password"
+                return await message.reply_text("🔐 Akun kamu menggunakan Verifikasi 2-Langkah (2FA).\nSilakan kirim **Password 2FA** kamu:")
+            except (PhoneCodeInvalid, PhoneCodeExpired):
+                return await message.reply_text("❌ Kode OTP salah atau sudah expired. Silakan masukkan lagi dengan benar:")
+            except Exception as e:
+                await temp_client.disconnect()
+                del login_sessions[user_id]
+                return await message.reply_text(f"❌ Gagal login: `{e}`")
+
+        # Step 3: Menerima Password 2FA
+        elif step == "password":
+            temp_client = session_info["client"]
+            try:
+                await temp_client.check_password(text)
+                session_string = await temp_client.export_session_string()
+                await temp_client.disconnect()
+
+                db["users"][user_id]["session"] = session_string
+                save_db(db)
+                del login_sessions[user_id]
+
+                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap digunakan.")
+            except PasswordHashInvalid:
+                return await message.reply_text("❌ Password 2FA salah! Coba masukkan lagi:")
+            except Exception as e:
+                await temp_client.disconnect()
+                del login_sessions[user_id]
+                return await message.reply_text(f"❌ Gagal login: `{e}`")
+
+    # -------------------------------------------------------------
+    # 2. HANDLE STATE PENGATURAN FITUR (USER STATES)
+    # -------------------------------------------------------------
     if user_id in user_states:
         state = user_states[user_id]
         
@@ -168,12 +231,25 @@ async def main_handler(client, message):
             del user_states[user_id]
             return await message.reply_text("✅ Auto Replay berhasil dikonfigurasi dan aktif!")
 
-    # 3. FITUR LAINNYA
+    # -------------------------------------------------------------
+    # 3. MENU UTAMA (REPLY KEYBOARD BUTTONS)
+    # -------------------------------------------------------------
+    if text == "⚙️ Panel Control Userbot":
+        if plan == "none":
+            return await message.reply_text("❌ Anda belum memiliki paket aktif.")
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Setting Auto BC", callback_data="set_bc"), InlineKeyboardButton("🔄 Setting Auto Forward", callback_data="set_fv")],
+            [InlineKeyboardButton("🤖 Setting Auto Replay (WTB)", callback_data="set_replay")],
+            [InlineKeyboardButton("📊 Status & Config Saat Ini", callback_data="view_config")]
+        ])
+        return await message.reply_text("⚙️ **PANEL KONTROL USERBOT**\n\nSilakan pilih fitur yang ingin Anda atur:", reply_markup=keyboard)
+
     elif text == "🚀 Buat / Login Userbot":
         if plan == "none":
             return await message.reply_text("❌ Silakan beli paket atau klaim trial gratis dulu.")
         login_sessions[user_id] = {"step": "phone"}
-        return await message.reply_text("📱 Kirimkan Nomor HP Telegram Anda (+628xxxxxxxxxx):")
+        return await message.reply_text("📱 Kirimkan Nomor HP Telegram Anda beserta kode negara (Contoh: `+628123456789`):")
 
     elif text == "🎁 Coba Gratis":
         if user_data.get("claimed_trial"):
@@ -181,7 +257,7 @@ async def main_handler(client, message):
         exp_date = (datetime.now() + timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
         db["users"][user_id]["plan"] = "spesial"
         db["users"][user_id]["expired"] = exp_date
-        db["users"][user_id]["claimed_trial"] = True
+        db["users"][user_data.get("claimed_trial")] = True
         save_db(db)
         return await message.reply_text(f"🎉 **TRIAL GRATIS 5 JAM AKTIF!**\nExpired: `{exp_date}`\nSilakan klik **🚀 Buat / Login Userbot**.")
 
@@ -192,7 +268,7 @@ async def main_handler(client, message):
             "⚡ **Auto Replay WTB / Keyword Smart System**\n*Penyergap pesan paling cerdas! Tangkap pesan calon pembeli di grup secara otomatis.*"
         )
 
-# --- CALLBACK QUERY HANDLER (PANEL CONTROL) ---
+# --- CALLBACK QUERY HANDLER ---
 @app.on_callback_query()
 async def cb_handler(client, cb: CallbackQuery):
     user_id = str(cb.from_user.id)
