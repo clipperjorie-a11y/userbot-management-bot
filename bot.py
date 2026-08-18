@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from pyrogram import Client, filters
 from pyrogram.types import (
@@ -12,16 +13,19 @@ from pyrogram.errors import (
 )
 from database import get_db, save_db
 
+# Aktifkan logging agar aktivitas bot terlihat di terminal/console
+logging.basicConfig(level=logging.INFO)
+
 # --- CONFIGURATION ---
-# Gunakan Environment Variables untuk keamanan!
+# Ambil dari environment variable atau gunakan nilai default jika tidak diset
 API_ID = int(os.getenv("API_ID", "36488953"))
-API_HASH = os.getenv("API_HASH", "ISI_API_HASH_BARU_DI_SINI")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ISI_BOT_TOKEN_BARU_DI_SINI")
+API_HASH = os.getenv("API_HASH", "9ff7f56335f9859c5979a2a64cc5de7d")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8806476092:AAEQflCwvylPWCThNEHS33dc9OW65WDODK8")
 OWNER_ID = int(os.getenv("OWNER_ID", "7193478617"))
 
 app = Client("bot_controller", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Penyimpanan sementara untuk sesi login & state input
+# Penyimpanan sementara dalam memori (RAM)
 login_sessions = {}
 user_states = {}
 
@@ -37,17 +41,21 @@ def build_reply_keyboard(user_id):
         [KeyboardButton("📚 Panduan Buat"), KeyboardButton("🎁 Coba Gratis")]
     ]
     
-    if int(user_id) == OWNER_ID or "seller" in plan:
+    # Menu Tambahan untuk Owner / Reseller
+    if int(user_id) == OWNER_ID or "seller" in str(plan):
         buttons.append([KeyboardButton("👑 Panel Akses (Owner/Seller)")])
         
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 # --- COMMAND /START ---
-@app.on_message(filters.command("start") & filters.private)
+@app.on_message(filters.command("start"))
 async def start_cmd(client, message):
     user_id = str(message.from_user.id)
     db = get_db()
-    if "users" not in db: db["users"] = {}
+    
+    if "users" not in db: 
+        db["users"] = {}
+        
     if user_id not in db["users"]:
         db["users"][user_id] = {
             "plan": "none",
@@ -64,19 +72,19 @@ async def start_cmd(client, message):
         save_db(db)
 
     text = (
-        "Selamat datang di USERBOT JASEB OTOMATIS & AUTOREPLAY!\n"
-        "Gunakan menu di bawah untuk mengelola Userbot kamu."
+        "Selamat datang di **USERBOT JASEB OTOMATIS & AUTOREPLAY**!\n\n"
+        "Gunakan menu tombol di bawah untuk mengelola Userbot kamu."
     )
     await message.reply_text(text, reply_markup=build_reply_keyboard(user_id))
 
 # --- COMMAND /ADDPREM (OWNER/SELLER) ---
-@app.on_message(filters.command("addprem") & filters.private)
+@app.on_message(filters.command("addprem"))
 async def addprem_cmd(client, message):
     user_id = str(message.from_user.id)
     db = get_db()
     sender_plan = db.get("users", {}).get(user_id, {}).get("plan", "none")
 
-    if message.from_user.id != OWNER_ID and "seller" not in sender_plan:
+    if message.from_user.id != OWNER_ID and "seller" not in str(sender_plan):
         return await message.reply_text("❌ Anda tidak memiliki akses untuk memberikan paket.")
 
     args = message.text.split()
@@ -84,7 +92,9 @@ async def addprem_cmd(client, message):
         return await message.reply_text(
             "⚠️ **FORMAT SALAH**\n\n"
             "Gunakan format:\n"
-            "`/addprem [USER_ID] [PAKET] [HARI]`"
+            "`/addprem [USER_ID] [PAKET] [HARI]`\n\n"
+            "**Pilihan Paket:**\n"
+            "• `basic` | `replay` | `spesial` | `reseller_basic` | `reseller_spesial`"
         )
 
     target_id = str(args[1])
@@ -111,12 +121,13 @@ async def addprem_cmd(client, message):
     await message.reply_text(
         f"✅ **AKSES BERHASIL DIBERIKAN!**\n\n"
         f"• Target ID: `{target_id}`\n"
-        f"• Jenis Paket: `{paket.upper()}`\n"
+        f"• Paket: `{paket.upper()}`\n"
+        f"• Durasi: `{days} Hari`\n"
         f"• Expired: `{exp_date}`"
     )
 
-# --- MAIN TEXT HANDLER ---
-@app.on_message(filters.private & filters.text & ~filters.command(["start", "addprem"]))
+# --- MAIN TEXT & INTERACTION HANDLER ---
+@app.on_message(filters.text & ~filters.command(["start", "addprem"]))
 async def main_handler(client, message):
     user_id = str(message.from_user.id)
     text = message.text
@@ -126,13 +137,13 @@ async def main_handler(client, message):
     plan = user_data.get("plan", "none")
 
     # -------------------------------------------------------------
-    # 1. HANDLE ALUR LOGIN TELEGRAM (Nomor HP -> OTP -> Password)
+    # 1. ALUR LOGIN TELEGRAM (Nomor HP -> OTP -> Password 2FA)
     # -------------------------------------------------------------
     if user_id in login_sessions:
         session_info = login_sessions[user_id]
         step = session_info.get("step")
 
-        # Step 1: Menerima Nomor Telepon
+        # Step A: Terima Nomor Telepon
         if step == "phone":
             phone_number = text.replace(" ", "").replace("-", "")
             temp_client = Client(f"temp_{user_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
@@ -147,19 +158,19 @@ async def main_handler(client, message):
                 }
                 return await message.reply_text(
                     "📩 Kode OTP telah dikirim oleh Telegram!\n\n"
-                    "Silakan kirim kode OTP dengan format spasi di tengahnya agar tidak diblokir Telegram.\n"
+                    "Silakan kirim kode OTP dengan **spasi di antara angkanya** agar tidak diblokir Telegram.\n"
                     "Contoh jika kode `12345`, kirim: `1 2 3 4 5`"
                 )
             except PhoneNumberInvalid:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
-                return await message.reply_text("❌ Nomor telepon tidak valid! Klik **🚀 Buat / Login Userbot** lagi.")
+                return await message.reply_text("❌ Nomor telepon tidak valid! Silakan klik **🚀 Buat / Login Userbot** lagi.")
             except Exception as e:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
                 return await message.reply_text(f"❌ Terjadi kesalahan: `{e}`")
 
-        # Step 2: Menerima Kode OTP
+        # Step B: Terima OTP
         elif step == "otp":
             otp_code = text.replace(" ", "").replace("-", "")
             temp_client = session_info["client"]
@@ -171,24 +182,23 @@ async def main_handler(client, message):
                 session_string = await temp_client.export_session_string()
                 await temp_client.disconnect()
 
-                # Simpan Session String ke DB
                 db["users"][user_id]["session"] = session_string
                 save_db(db)
                 del login_sessions[user_id]
 
-                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap digunakan.")
+                return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap digunakan dan diatur lewat Panel Control.")
 
             except SessionPasswordNeeded:
                 login_sessions[user_id]["step"] = "password"
-                return await message.reply_text("🔐 Akun kamu menggunakan Verifikasi 2-Langkah (2FA).\nSilakan kirim **Password 2FA** kamu:")
+                return await message.reply_text("🔐 Akun kamu menggunakan Verifikasi 2-Langkah (2FA).\nSilakan kirim **Password 2FA** akun Telegram kamu:")
             except (PhoneCodeInvalid, PhoneCodeExpired):
-                return await message.reply_text("❌ Kode OTP salah atau sudah expired. Silakan masukkan lagi dengan benar:")
+                return await message.reply_text("❌ Kode OTP salah atau expired. Coba masukkan lagi dengan benar:")
             except Exception as e:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
                 return await message.reply_text(f"❌ Gagal login: `{e}`")
 
-        # Step 3: Menerima Password 2FA
+        # Step C: Terima Password 2FA
         elif step == "password":
             temp_client = session_info["client"]
             try:
@@ -202,14 +212,14 @@ async def main_handler(client, message):
 
                 return await message.reply_text("🎉 **LOGIN BERHASIL!**\nUserbot kamu sekarang siap digunakan.")
             except PasswordHashInvalid:
-                return await message.reply_text("❌ Password 2FA salah! Coba masukkan lagi:")
+                return await message.reply_text("❌ Password 2FA salah! Masukkan lagi password yang benar:")
             except Exception as e:
                 await temp_client.disconnect()
                 del login_sessions[user_id]
                 return await message.reply_text(f"❌ Gagal login: `{e}`")
 
     # -------------------------------------------------------------
-    # 2. HANDLE STATE PENGATURAN FITUR (USER STATES)
+    # 2. ALUR SETTING (STATE INPUT USER)
     # -------------------------------------------------------------
     if user_id in user_states:
         state = user_states[user_id]
@@ -232,7 +242,7 @@ async def main_handler(client, message):
             return await message.reply_text("✅ Auto Replay berhasil dikonfigurasi dan aktif!")
 
     # -------------------------------------------------------------
-    # 3. MENU UTAMA (REPLY KEYBOARD BUTTONS)
+    # 3. TOMBOL MENU UTAMA (REPLY KEYBOARD)
     # -------------------------------------------------------------
     if text == "⚙️ Panel Control Userbot":
         if plan == "none":
@@ -257,7 +267,7 @@ async def main_handler(client, message):
         exp_date = (datetime.now() + timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
         db["users"][user_id]["plan"] = "spesial"
         db["users"][user_id]["expired"] = exp_date
-        db["users"][user_data.get("claimed_trial")] = True
+        db["users"][user_id]["claimed_trial"] = True
         save_db(db)
         return await message.reply_text(f"🎉 **TRIAL GRATIS 5 JAM AKTIF!**\nExpired: `{exp_date}`\nSilakan klik **🚀 Buat / Login Userbot**.")
 
@@ -268,7 +278,7 @@ async def main_handler(client, message):
             "⚡ **Auto Replay WTB / Keyword Smart System**\n*Penyergap pesan paling cerdas! Tangkap pesan calon pembeli di grup secara otomatis.*"
         )
 
-# --- CALLBACK QUERY HANDLER ---
+# --- CALLBACK QUERY HANDLER (INLINE BUTTONS) ---
 @app.on_callback_query()
 async def cb_handler(client, cb: CallbackQuery):
     user_id = str(cb.from_user.id)
