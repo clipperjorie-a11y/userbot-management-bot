@@ -1,9 +1,10 @@
-import os
+import os, requests, asyncio
 from pyrogram import Client, filters
 from pyrogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
+from datetime import datetime, timedelta
 from database import get_db, save_db
 
 # --- CONFIGURATION ---
@@ -44,58 +45,78 @@ async def message_handler(client, message):
     user_id = str(message.from_user.id)
     text = message.text
     db = get_db()
+    if "users" not in db: db["users"] = {}
+    
     user_data = db.get("users", {}).get(user_id, {})
     user_plan = str(user_data.get("plan", "none")).lower()
 
-    # 1. Logic Tombol "🚀 Buat Userbot"
+    # Cek apakah paket expired (untuk Trial/Regular)
+    exp_str = user_data.get("expired", "")
+    if exp_str and exp_str != "Permanen":
+        try:
+            exp_time = datetime.strptime(exp_str, "%Y-%m-%d %H:%M")
+            if datetime.now() > exp_time:
+                user_plan = "none"
+                db["users"][user_id]["plan"] = "none"
+                save_db(db)
+        except:
+            pass
+
+    # 1. Tombol "🚀 Buat Userbot"
     if text == "🚀 Buat Userbot":
         if message.from_user.id != OWNER_ID and (user_plan == "none" or not user_plan):
             return await message.reply_text(
                 "❌ **AKSES DITOLAK**\n\n"
-                "Anda belum memiliki akses/paket aktif.\n"
-                "Silakan pilih paket di menu **🛒 Toko** atau hubungi Owner.",
+                "Anda belum memiliki akses aktif.\n"
+                "Silakan klaim **🎁 Coba Gratis** (5 Jam) atau beli paket di **🛒 Toko**!",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Hubungi Owner / CS", url=f"https://t.me/{CS_USERNAME}")]])
             )
         
         login_sessions[user_id] = {"step": "phone"}
-        return await message.reply_text("📱 **LOGIN VIA OTP**\nSilakan kirimkan Nomor HP Anda (+628xxxxxxxxxx):")
+        return await message.reply_text("📱 **LOGIN USERBOT VIA OTP**\nSilakan kirimkan Nomor HP Anda (+628xxxxxxxxxx):")
 
-    # 2. Logic Tombol "🛒 Toko" (Price List 4 Katalog)
+    # 2. Tombol "🎁 Coba Gratis" (OTOMATIS 5 JAM TANPA IZIN OWNER)
+    elif text == "🎁 Coba Gratis":
+        # Cek jika user sudah pernah klaim trial
+        if user_data.get("claimed_trial"):
+            return await message.reply_text("❌ Anda sudah pernah mengambil Trial Gratis 5 Jam sebelumnya.")
+
+        # Set Akses Gratis 5 Jam
+        exp_date = (datetime.now() + timedelta(hours=5)).strftime("%Y-%m-%d %H:%M")
+        
+        if user_id not in db["users"]: db["users"][user_id] = {}
+        db["users"][user_id]["plan"] = "trial"
+        db["users"][user_id]["expired"] = exp_date
+        db["users"][user_id]["claimed_trial"] = True
+        save_db(db)
+
+        # Langsung tawarkan login
+        login_sessions[user_id] = {"step": "phone"}
+        return await message.reply_text(
+            "🎉 **TRIAL GRATIS 5 JAM BERHASIL DIAKTIFKAN!**\n\n"
+            "Akses Userbot Anda aktif selama **5 Jam** tanpa perlu izin Owner.\n"
+            f"• Masa Berlaku s/d: `{exp_date}`\n\n"
+            "📱 **LANGSUNG BUAT USERBOT:**\n"
+            "Silakan kirimkan Nomor HP Telegram Anda sekarang (+628xxxxxxxxxx):"
+        )
+
+    # 3. Tombol "🛒 Toko" (Pricelist 4 Katalog)
     elif text == "🛒 Toko":
         pricelist_text = (
             "🛒 **DAFTAR HARGA & PRICELIST USERBOT**\n\n"
-            "───────────────\n"
-            "🔹 **1. KATALOG BASIC**\n"
-            "*(Akses: Auto BC + Auto Forward)*\n"
-            "• 1 Hari : Rp1.000\n"
-            "• 1 Minggu : Rp3.000\n"
-            "• 1 Bulan : Rp3.500\n"
-            "• Permanen : Rp18.000\n\n"
-            "───────────────\n"
-            "🔹 **2. KATALOG AUTO REPLAY / WTB**\n"
-            "*(Akses: Auto Replay / Auto WTB)*\n"
-            "• 1 Hari : Rp2.000\n"
-            "• 1 Minggu : Rp3.000\n"
-            "• 1 Bulan : Rp5.000\n"
-            "• Permanen : Rp20.000\n\n"
-            "───────────────\n"
-            "⭐ **3. KATALOG SPESIAL**\n"
-            "*(Akses: Auto BC + Auto Forward + Auto Replay)*\n"
-            "• 1 Hari : Rp3.000\n"
-            "• 1 Minggu : Rp4.000\n"
-            "• 1 Bulan : Rp7.000\n"
-            "• Permanen : Rp35.000\n\n"
-            "───────────────\n"
-            "💼 **4. KATALOG RESELLER**\n\n"
-            "• **Basic Seller** *(Khusus Akses Basic)*:\n"
-            "  └ 1 Bulan : Rp35.000\n\n"
-            "• **Auto Replay Seller** *(Khusus Akses Auto Replay)*:\n"
-            "  └ 1 Bulan : Rp35.000\n\n"
-            "• **Spesial Seller** *(Akses Auto BC + Auto Forward + Spesial)*:\n"
-            "  └ 1 Bulan : Rp50.000\n"
-            "  └ Permanen : Rp250.000\n"
-            "───────────────\n\n"
-            "Untuk melakukan pemesanan, silakan klik tombol di bawah untuk beli via Owner/CS:"
+            "🔹 **1. KATALOG BASIC** *(Auto BC + Auto Forward)*\n"
+            "• 1 Hari : Rp1.000 | 1 Minggu : Rp3.000\n"
+            "• 1 Bulan : Rp3.500 | Permanen : Rp18.000\n\n"
+            "🔹 **2. KATALOG AUTO REPLAY** *(Auto Replay / WTB)*\n"
+            "• 1 Hari : Rp2.000 | 1 Minggu : Rp3.000\n"
+            "• 1 Bulan : Rp5.000 | Permanen : Rp20.000\n\n"
+            "⭐ **3. KATALOG SPESIAL** *(Auto BC + Forward + Replay)*\n"
+            "• 1 Hari : Rp3.000 | 1 Minggu : Rp4.000\n"
+            "• 1 Bulan : Rp7.000 | Permanen : Rp35.000\n\n"
+            "💼 **4. KATALOG RESELLER**\n"
+            "• Basic Seller : Rp35.000/bln\n"
+            "• Auto Replay Seller : Rp35.000/bln\n"
+            "• Spesial Seller : Rp50.000/bln | Rp250.000/perm\n"
         )
         return await message.reply_text(
             pricelist_text,
@@ -104,69 +125,42 @@ async def message_handler(client, message):
             ])
         )
 
-    # 3. Logic Tombol Keyboard Lainnya
+    # 4. Tombol "💡 Fitur Unggulan" (Sangat Menarik & Khusus Userbot)
     elif text == "💡 Fitur Unggulan":
         fitur_text = (
-            "✨ **FITUR UNGGULAN USERBOT:**\n\n"
-            "• 📢 **Auto BC & Auto Forward:** Kirim pesan otomatis ke grup LPM secara teratur.\n"
-            "• 🤖 **Auto Replay / WTB:** Balas & tangkap kata kunci pesan secara instan.\n"
-            "• ⭐ **Paket Spesial:** Kombinasi lengkap seluruh fitur dalam satu akun.\n"
-            "• 💼 **Lisensi Reseller:** Buka usaha sewa userbot dengan panel sendiri."
+            "🔥 **KEUNGGULAN USERBOT JASEB & AUTO REPLAY** 🔥\n\n"
+            "📢 **Auto BC & Forward Super Cepat**\n"
+            "   *Promosikan jualanmu ke ribuan grup LPM secara otomatis tanpa henti. Hemat waktu, tenaga, dan tingkatkan omzet jutaan rupiah!*\n\n"
+            "⚡ **Auto Replay WTB / Keyword Smart System**\n"
+            "   *Penyergap pesan paling cerdas! Tangkap pesan calon pembeli yang cari barang (WTB) di grup-grup dan langsung balas detik itu juga sebelum keduluan kompetitor.*\n\n"
+            "🛡️ **Sistem Anti-Banned & Proteksi Tinggi**\n"
+            "   *Dibuat dengan sistem delay dan proteksi pintar agar akun Telegram kamu tetap aman dan nyaman digunakan untuk promosi harian.*\n\n"
+            "🎮 **Kontrol Praktis Lewat Bot**\n"
+            "   *Tidak perlu ribet ngoding! Semua settingan pesan, kata kunci, dan tujuan grup bisa kamu atur sendiri dalam hitungan detik lewa bot ini.*"
         )
         await message.reply_text(fitur_text)
 
+    # 5. Tombol Lainnya
     elif text == "📚 Panduan Buat":
         await message.reply_text(
             "📚 **PANDUAN PEMBUATAN USERBOT:**\n\n"
-            "1. Pilih paket pilihanmu di menu **🛒 Toko**.\n"
-            "2. Lakukan pembayaran ke CS/Owner.\n"
-            "3. Setelah akses diaktifkan, tekan tombol **🚀 Buat Userbot**.\n"
-            "4. Kirim nomor HP Telegram dan masukkan kode OTP.\n"
-            "5. Userbot langsung aktif dan siap digunakan!"
-        )
-
-    elif text == "🎁 Coba Gratis":
-        await message.reply_text(
-            "🎁 **TRIAL GRATIS**\n\n"
-            "Ingin mencoba keunggulan fitur Userbot?\n"
-            "Silakan hubungi Admin/CS untuk klaim sesi trial gratis.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Klaim Trial ke CS", url=f"https://t.me/{CS_USERNAME}")]])
+            "1. Coba gratis via menu **🎁 Coba Gratis** atau beli paket di **🛒 Toko**.\n"
+            "2. Klik tombol **🚀 Buat Userbot**.\n"
+            "3. Kirimkan nomor HP Telegram (+62...).\n"
+            "4. Masukkan kode OTP Telegram yang masuk.\n"
+            "5. Userbot kamu langsung aktif & siap menebar promosi!"
         )
 
     elif text == "🔑 Klaim Token":
-        await message.reply_text("🔑 **KLAIM TOKEN AKSES**\n\nSilakan masukkan kode token Anda:")
+        await message.reply_text("🔑 **KLAIM TOKEN AKSES**\n\nSilakan masukkan kode token unik kamu:")
 
-    # 4. Handle Input OTP
+    # 6. Alur Input Login (OTP)
     if user_id in login_sessions:
         if login_sessions[user_id]["step"] == "phone":
             login_sessions[user_id]["step"] = "otp"
-            await message.reply_text("⏳ Menghubungkan ke server Telegram... Silakan kirimkan **Kode OTP** yang Anda terima:")
-
-# --- COMMAND ADDPREM (OWNER ONLY) ---
-@app.on_message(filters.command("addprem") & filters.private)
-async def addprem_cmd(client, message):
-    if message.from_user.id != OWNER_ID:
-        return await message.reply_text("❌ Perintah ini hanya untuk Owner.")
-    
-    args = message.text.split()
-    if len(args) < 3:
-        return await message.reply_text("⚠️ Format: `/addprem [USER_ID] [HARI]`")
-    
-    target_id = str(args[1])
-    try:
-        days = int(args[2])
-    except ValueError:
-        days = 30
-
-    db = get_db()
-    if "users" not in db: db["users"] = {}
-    if target_id not in db["users"]: db["users"][target_id] = {}
-    
-    db["users"][target_id]["plan"] = "vip"
-    save_db(db)
-    await message.reply_text(f"✅ Berhasil memberikan akses ke ID `{target_id}` selama {days} hari.")
+            await message.reply_text("⏳ Menghubungkan ke server Telegram... Silakan masukkan **Kode OTP** yang dikirimkan Telegram:")
 
 if __name__ == "__main__":
-    print("Bot Controller berjalan...")
+    print("Bot Controller Userbot Berjalan...")
     app.run()
     
