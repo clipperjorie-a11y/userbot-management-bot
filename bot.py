@@ -17,7 +17,6 @@ app = Client("bot_controller", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_T
 
 login_sessions = {}
 
-# --- FUNGSI GATEWAY ORDERKUOTA / OKECONNECT ---
 def generate_qris(amount):
     if not ORKUT_AUTH_TOKEN or not ORKUT_MERCHANT_ID:
         return None, None
@@ -29,18 +28,6 @@ def generate_qris(amount):
     except Exception:
         pass
     return None, None
-
-def check_qris_status(trx_id, amount):
-    if not ORKUT_AUTH_TOKEN or not ORKUT_MERCHANT_ID:
-        return False
-    url = f"https://qris.orderkuota.com/api/check_status?token={ORKUT_AUTH_TOKEN}&merchant={ORKUT_MERCHANT_ID}&trx_id={trx_id}&amount={amount}"
-    try:
-        res = requests.get(url, timeout=10).json()
-        if res.get("status") == "PAID" or res.get("data", {}).get("status") == "PAID":
-            return True
-    except Exception:
-        pass
-    return False
 
 def build_main_keyboard(user_data):
     keyboard = []
@@ -88,6 +75,7 @@ async def callback_handler(client, cb: CallbackQuery):
     data = cb.data
     db = get_db()
     
+    # Memberi tahu Telegram bahwa callback diterima (mencegah tombol berputar terus)
     await cb.answer()
 
     if "users" not in db:
@@ -140,28 +128,14 @@ async def callback_handler(client, cb: CallbackQuery):
         if qris_url:
             if "payments" not in db:
                 db["payments"] = {}
-            db["payments"][trx_id] = {
-                "user_id": user_id, 
-                "plan": plan, 
-                "dur": dur, 
-                "amount": amount,
-                "status": "pending"
-            }
+            db["payments"][trx_id] = {"user_id": user_id, "plan": plan, "dur": dur, "status": "pending"}
             save_db(db)
-
-            # Kirim gambar QRIS ke chat
-            await cb.message.delete()
-            await client.send_photo(
-                chat_id=user_id,
-                photo=qris_url,
-                caption=(
-                    f"💳 **PEMBAYARAN QRIS OTOMATIS**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📦 Paket: **{plan.upper()}**\n"
-                    f"💰 Total Biaya: **Rp{amount:,}**\n\n"
-                    f"Silakan Scan QRIS di atas menggunakan E-Wallet / M-Banking Anda.\n"
-                    f"Setelah membayar, klik tombol **'Cek Status Pembayaran'** di bawah."
-                ),
+            await cb.message.edit_text(
+                f"💳 **PEMBAYARAN QRIS OTOMATIS**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Paket: **{plan.upper()}**\n"
+                f"Total Biaya: **Rp{amount:,}**\n\n"
+                f"Silakan scan QRIS atau bayar via tombol di bawah:",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔄 Cek Status Pembayaran", callback_data=f"check_{trx_id}")],
                     [InlineKeyboardButton("⬅️ Batal / Kembali", callback_data="buy_menu")]
@@ -171,51 +145,10 @@ async def callback_handler(client, cb: CallbackQuery):
             await cb.message.edit_text(
                 f"💳 **PEMBAYARAN MANUAL**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Sistem QRIS OrderKuota belum terkonfigurasi di Railway.\n"
-                f"Silakan transfer sebesar **Rp{amount:,}** ke Owner (`{OWNER_ID}`).",
+                f"Silakan transfer sebesar **Rp{amount:,}** ke Owner (`{OWNER_ID}`).\n"
+                f"Konfirmasi bukti transfer ke Owner.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="buy_menu")]])
             )
-
-    elif data.startswith("check_"):
-        trx_id = data.replace("check_", "")
-        payments = db.get("payments", {})
-        
-        if trx_id not in payments:
-            return await cb.answer("❌ Transaksi tidak ditemukan!", show_alert=True)
-        
-        pay_info = payments[trx_id]
-        if pay_info.get("status") == "success":
-            return await cb.answer("✅ Pembayaran ini sudah sukses dan paket telah aktif!", show_alert=True)
-            
-        amount = pay_info.get("amount")
-        is_paid = check_qris_status(trx_id, amount)
-
-        if is_paid:
-            pay_plan = pay_info.get("plan")
-            pay_dur = pay_info.get("dur")
-            
-            exp_days = 180 if pay_dur in ["perm", "permanen"] else 30
-            exp_date = (datetime.now() + timedelta(days=exp_days)).strftime("%Y-%m-%d")
-
-            db["users"][user_id]["plan"] = pay_plan
-            db["users"][user_id]["expired"] = exp_date
-            db["payments"][trx_id]["status"] = "success"
-            save_db(db)
-
-            await cb.answer("🎉 Pembayaran Berhasil Terverifikasi!", show_alert=True)
-            await cb.message.delete()
-            await client.send_message(
-                chat_id=user_id,
-                text=(
-                    f"🎉 **PEMBAYARAN BERHASIL!**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"Paket **{pay_plan.upper()}** Anda telah aktif hingga `{exp_date}`.\n\n"
-                    f"Silakan klik tombol **'🔑 Login Userbot (OTP)'** untuk menghubungkan akun Telegram Anda."
-                ),
-                reply_markup=build_main_keyboard(db["users"][user_id])
-            )
-        else:
-            await cb.answer("⏳ Pembayaran belum terdeteksi. Silakan selesaikan pembayaran lalu coba tekan tombol ini lagi.", show_alert=True)
 
     elif data == "menu_groups":
         text = (
@@ -247,6 +180,7 @@ async def callback_handler(client, cb: CallbackQuery):
             db["users"][user_id]["target_groups"] = target_dict
             save_db(db)
             
+            # Re-render menu grup
             keyboard = []
             for c_id, c_info in target_dict.items():
                 status_icon = "✅" if c_info.get("active", False) else "❌"
@@ -409,4 +343,4 @@ async def addseller_cmd(client, message):
     db["sellers"][target_id] = seller_type
     save_db(db)
     await message.reply_text(f"✅ User `{target_id}` diangkat menjadi **{seller_type.upper()}**!")
-        
+    
