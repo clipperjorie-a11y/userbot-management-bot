@@ -9,7 +9,6 @@ API_ID = int(os.getenv("API_ID", "36488953"))
 API_HASH = os.getenv("API_HASH", "9ff7f56335f9859c5979a2a64cc5de7d")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8806476092:AAEQflCwvylPWCThNEHS33dc9OW65WDODK8")
 OWNER_ID = 7193478617
-CS_USERNAME = "cThatchers"
 
 ORKUT_AUTH_TOKEN = os.getenv("ORKUT_AUTH_TOKEN", "")
 ORKUT_MERCHANT_ID = os.getenv("ORKUT_MERCHANT_ID", "")
@@ -18,6 +17,7 @@ app = Client("bot_controller", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_T
 
 login_sessions = {}
 
+# --- FUNGSI GATEWAY ORDERKUOTA / OKECONNECT ---
 def generate_qris(amount):
     if not ORKUT_AUTH_TOKEN or not ORKUT_MERCHANT_ID:
         return None, None
@@ -56,7 +56,7 @@ def build_main_keyboard(user_data):
 
     keyboard.append([
         InlineKeyboardButton("💳 Beli Paket (QRIS)", callback_data="buy_menu"),
-        InlineKeyboardButton("💬 Bantuan / CS", url=f"https://t.me/{CS_USERNAME}")
+        InlineKeyboardButton("💬 Bantuan / CS", url=f"tg://user?id={OWNER_ID}")
     ])
     return InlineKeyboardMarkup(keyboard)
 
@@ -149,6 +149,7 @@ async def callback_handler(client, cb: CallbackQuery):
             }
             save_db(db)
 
+            # Kirim gambar QRIS ke chat
             await cb.message.delete()
             await client.send_photo(
                 chat_id=user_id,
@@ -171,11 +172,8 @@ async def callback_handler(client, cb: CallbackQuery):
                 f"💳 **PEMBAYARAN MANUAL**\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
                 f"Sistem QRIS OrderKuota belum terkonfigurasi di Railway.\n"
-                f"Silakan hubungi CS: @{CS_USERNAME}",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💬 Hubungi CS", url=f"https://t.me/{CS_USERNAME}")],
-                    [InlineKeyboardButton("⬅️ Kembali", callback_data="buy_menu")]
-                ])
+                f"Silakan transfer sebesar **Rp{amount:,}** ke Owner (`{OWNER_ID}`).",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="buy_menu")]])
             )
 
     elif data.startswith("check_"):
@@ -411,4 +409,4 @@ async def addseller_cmd(client, message):
     db["sellers"][target_id] = seller_type
     save_db(db)
     await message.reply_text(f"✅ User `{target_id}` diangkat menjadi **{seller_type.upper()}**!")
-            
+        
