@@ -7,9 +7,39 @@ from pymongo import MongoClient
 # MongoDB Connection
 # =====================
 MONGO_URI = os.environ.get("MONGO_URI", "")
-client = MongoClient(MONGO_URI)
-mongo_db = client["botdb"]
-collection = mongo_db["data"]
+
+try:
+    # Koneksi MongoDB dengan SSL/TLS yang benar
+    client = MongoClient(
+        MONGO_URI,
+        tls=True,
+        tlsCAFile="/etc/ssl/certs/ca-certificates.crt",
+        retryWrites=True,
+        w='majority',
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=None
+    )
+    # Test koneksi
+    client.admin.command('ping')
+    print("✅ MongoDB Connected!")
+except Exception as e:
+    print(f"⚠️ MongoDB Connection Error: {e}")
+    # Fallback koneksi tanpa SSL untuk development
+    try:
+        client = MongoClient(
+            MONGO_URI,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=10000,
+            retryWrites=False
+        )
+        print("⚠️ Connected to MongoDB without SSL (dev mode)")
+    except Exception as e2:
+        print(f"❌ MongoDB Failed: {e2}")
+        client = None
+
+mongo_db = client["botdb"] if client else None
+collection = mongo_db["data"] if mongo_db else None
 
 # =====================
 # Core DB Functions
@@ -18,6 +48,9 @@ collection = mongo_db["data"]
 def get_db():
     """Get database"""
     try:
+        if not collection:
+            return {"users": {}, "sellers": {}, "transactions": []}
+            
         doc = collection.find_one({"_id": "main"})
         if not doc:
             default_db = {
@@ -36,6 +69,9 @@ def get_db():
 def save_db(data):
     """Save database"""
     try:
+        if not collection:
+            return False
+            
         data["_id"] = "main"
         collection.replace_one({"_id": "main"}, data, upsert=True)
         return True
@@ -54,21 +90,27 @@ def init_user(uid):
     if uid not in db["users"]:
         db["users"][uid] = {
             "uid": uid,
-            "access": False,
-            "access_until": None,
+            "tier": "none",
+            "expired": None,
+            "warranty": None,
+            "session": "",
+            "claimed_trial": False,
             "is_reseller": False,
-            "reseller_id": None,
             "reseller_customers": [],
-            "commission": 0,
             "settings": {
-                "auto_reply": False,
-                "auto_read": False,
-                "auto_typing": False,
-                "prefix": ".",
-                "language": "id"
+                "bc_enabled": False,
+                "bc_text": "",
+                "bc_delay": 5,
+                "bc_targets": [],
+                "fw_enabled": False,
+                "fw_source_ch": "",
+                "fw_targets": [],
+                "fw_delay": 5,
+                "ar_enabled": False,
+                "ar_keywords": [],
+                "ar_banwords": [],
+                "groups": []
             },
-            "keywords": [],
-            "banwords": [],
             "created_at": datetime.now().isoformat()
         }
         save_db(db)
@@ -93,34 +135,32 @@ def check_access(uid):
     """Check if user has access"""
     uid = str(uid)
     user = get_user(uid)
-    if not user.get("access", False):
+    if user.get("tier") == "none":
         return False
-    access_until = user.get("access_until")
-    if access_until:
+    expired = user.get("expired")
+    if expired:
         try:
-            until = datetime.fromisoformat(access_until)
+            until = datetime.fromisoformat(expired)
             if datetime.now() > until:
-                user["access"] = False
-                save_user(uid, user)
                 return False
         except Exception:
             pass
     return True
 
-def grant_access(uid, duration_days=30):
+def grant_access(uid, tier, duration_days=30):
     """Grant access to user"""
     uid = str(uid)
     user = get_user(uid)
-    user["access"] = True
-    user["access_until"] = (datetime.now() + timedelta(days=duration_days)).isoformat()
+    user["tier"] = tier
+    user["expired"] = (datetime.now() + timedelta(days=duration_days)).isoformat()
     return save_user(uid, user)
 
 def revoke_access(uid):
     """Revoke access from user"""
     uid = str(uid)
     user = get_user(uid)
-    user["access"] = False
-    user["access_until"] = None
+    user["tier"] = "none"
+    user["expired"] = None
     return save_user(uid, user)
 
 def get_all_users():
@@ -254,11 +294,18 @@ def reset_settings(uid):
     uid = str(uid)
     user = get_user(uid)
     user["settings"] = {
-        "auto_reply": False,
-        "auto_read": False,
-        "auto_typing": False,
-        "prefix": ".",
-        "language": "id"
+        "bc_enabled": False,
+        "bc_text": "",
+        "bc_delay": 5,
+        "bc_targets": [],
+        "fw_enabled": False,
+        "fw_source_ch": "",
+        "fw_targets": [],
+        "fw_delay": 5,
+        "ar_enabled": False,
+        "ar_keywords": [],
+        "ar_banwords": [],
+        "groups": []
     }
     return save_user(uid, user)
 
@@ -373,3 +420,4 @@ def clear_transactions():
     db["transactions"] = []
     return save_db(db)
     
+
