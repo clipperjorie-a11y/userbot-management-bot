@@ -18,7 +18,7 @@ async def handle_auto_reply(client, message):
         user_id = getattr(client, "owner_id", None)
         if not user_id: return
         
-        from database_v2 import get_db
+        from database import get_db
         db = get_db()
         user = db.get("users", {}).get(str(user_id), {})
         st = user.get("settings", {})
@@ -56,7 +56,7 @@ async def handle_auto_forward(client, message):
         user_id = getattr(client, "owner_id", None)
         if not user_id: return
         
-        from database_v2 import get_db
+        from database import get_db
         db = get_db()
         user = db.get("users", {}).get(str(user_id), {})
         st = user.get("settings", {})
@@ -96,7 +96,7 @@ async def handle_auto_broadcast(client):
         user_id = getattr(client, "owner_id", None)
         if not user_id: return
         
-        from database_v2 import get_db
+        from database import get_db
         db = get_db()
         user = db.get("users", {}).get(str(user_id), {})
         st = user.get("settings", {})
@@ -161,7 +161,7 @@ async def create_userbot(user_id, session_str):
 async def start_all_userbots():
     """Restore dan start semua active userbots"""
     try:
-        from database_v2 import get_db
+        from database import get_db
         db = get_db()
         
         for uid, user in db.get("users", {}).items():
@@ -224,3 +224,4 @@ def get_all_active_userbots():
     """Get semua active userbots list"""
     return list(active_userbots.keys())
         
+
