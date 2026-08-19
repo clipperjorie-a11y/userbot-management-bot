@@ -1,5 +1,5 @@
-pirogram==2.0.106
+pyrogram==2.0.102
 tgcrypto==1.2.5
-permintaan==2.31.0
+requests==2.31.0
 aiohttp==3.9.1
 python-dotenv==1.0.0
