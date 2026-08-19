@@ -1,8 +1,9 @@
 import asyncio
 import logging
+import os
 from aiohttp import web
-from bot import bot_app
-from userbot import timer_task, start_all_userbots
+from bot import bot_app, start_all_userbots
+from userbot import timer_task
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -20,12 +21,11 @@ async def start_services():
     asyncio.create_task(timer_task())
     logging.info("✅ Timer Task Started!")
 
-    app = web.Application()
-    app.router.add_get("/", handle_health_check)
-    runner = web.AppRunner(app)
+    web_app = web.Application()
+    web_app.router.add_get("/", handle_health_check)
+    runner = web.AppRunner(web_app)
     await runner.setup()
 
-    import os
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
