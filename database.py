@@ -1,15 +1,39 @@
 import os
 import json
+import logging
 from datetime import datetime, timedelta
 from pymongo import MongoClient
+
+logging.basicConfig(level=logging.INFO)
 
 # =====================
 # MongoDB Connection
 # =====================
 MONGO_URI = os.environ.get("MONGO_URI", "")
-client = MongoClient(MONGO_URI)
-mongo_db = client["botdb"]
-collection = mongo_db["data"]
+
+try:
+    # Create MongoDB client dengan proper SSL settings
+    client = MongoClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=30000,
+        connectTimeoutMS=30000,
+        socketTimeoutMS=30000,
+        retryWrites=True,
+        w='majority',
+        ssl=True,
+        tlsAllowInvalidCertificates=False,
+        maxPoolSize=50,
+        minPoolSize=10
+    )
+    # Test connection
+    client.admin.command('ping')
+    mongo_db = client["botdb"]
+    collection = mongo_db["data"]
+    logging.info("✅ MongoDB connected successfully!")
+except Exception as e:
+    logging.error(f"❌ MongoDB connection error: {e}")
+    mongo_db = None
+    collection = None
 
 # =====================
 # Core DB Functions
@@ -18,6 +42,10 @@ collection = mongo_db["data"]
 def get_db():
     """Get database"""
     try:
+        if not collection:
+            logging.warning("⚠️ MongoDB not connected, returning empty DB")
+            return {"_id": "main", "users": {}, "sellers": {}, "transactions": []}
+        
         doc = collection.find_one({"_id": "main"})
         if not doc:
             default_db = {
@@ -30,17 +58,21 @@ def get_db():
             return default_db
         return doc
     except Exception as e:
-        print(f"DB Load Error: {e}")
-        return {"users": {}, "sellers": {}, "transactions": []}
+        logging.error(f"DB Load Error: {e}")
+        return {"_id": "main", "users": {}, "sellers": {}, "transactions": []}
 
 def save_db(data):
     """Save database"""
     try:
+        if not collection:
+            logging.warning("⚠️ MongoDB not connected, data not saved")
+            return False
+        
         data["_id"] = "main"
         collection.replace_one({"_id": "main"}, data, upsert=True)
         return True
     except Exception as e:
-        print(f"DB Save Error: {e}")
+        logging.error(f"DB Save Error: {e}")
         return False
 
 # =====================
@@ -373,3 +405,4 @@ def clear_transactions():
     db["transactions"] = []
     return save_db(db)
     
+
