@@ -2,14 +2,37 @@ import os
 import json
 from datetime import datetime, timedelta
 from pymongo import MongoClient
+from urllib.parse import quote_plus
 
 # =====================
-# MongoDB Connection
+# MongoDB Connection with proper SSL/TLS
 # =====================
 MONGO_URI = os.environ.get("MONGO_URI", "")
-client = MongoClient(MONGO_URI)
-mongo_db = client["botdb"]
-collection = mongo_db["data"]
+
+# Add SSL/TLS parameters jika MONGO_URI ada
+if MONGO_URI:
+    if "?" not in MONGO_URI:
+        MONGO_URI += "?retryWrites=true&w=majority&ssl=true"
+    else:
+        if "ssl=" not in MONGO_URI:
+            MONGO_URI += "&ssl=true"
+
+try:
+    client = MongoClient(
+        MONGO_URI,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=10000,
+        socketTimeoutMS=5000,
+        retryWrites=True
+    )
+    # Verify connection
+    client.admin.command('ping')
+    mongo_db = client["botdb"]
+    collection = mongo_db["data"]
+except Exception as e:
+    print(f"MongoDB Connection Error: {e}")
+    mongo_db = None
+    collection = None
 
 # =====================
 # Core DB Functions
@@ -18,6 +41,10 @@ collection = mongo_db["data"]
 def get_db():
     """Get database"""
     try:
+        if collection is None:
+            print("Database not connected")
+            return {"users": {}, "sellers": {}, "transactions": []}
+        
         doc = collection.find_one({"_id": "main"})
         if not doc:
             default_db = {
@@ -36,6 +63,10 @@ def get_db():
 def save_db(data):
     """Save database"""
     try:
+        if collection is None:
+            print("Database not connected")
+            return False
+        
         data["_id"] = "main"
         collection.replace_one({"_id": "main"}, data, upsert=True)
         return True
@@ -373,3 +404,4 @@ def clear_transactions():
     db["transactions"] = []
     return save_db(db)
     
+
