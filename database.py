@@ -1,22 +1,34 @@
-import json
 import os
+import json
 from datetime import datetime, timedelta
+from pymongo import MongoClient
 
-DB_FILE = "database.json"
+# =====================
+# MongoDB Connection
+# =====================
+MONGO_URI = os.environ.get("MONGO_URI", "")
+client = MongoClient(MONGO_URI)
+mongo_db = client["botdb"]
+collection = mongo_db["data"]
+
+# =====================
+# Core DB Functions
+# =====================
 
 def get_db():
     """Get database"""
-    if not os.path.exists(DB_FILE):
-        default_db = {
-            "users": {},
-            "sellers": {},
-            "transactions": []
-        }
-        save_db(default_db)
-        return default_db
     try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        doc = collection.find_one({"_id": "main"})
+        if not doc:
+            default_db = {
+                "_id": "main",
+                "users": {},
+                "sellers": {},
+                "transactions": []
+            }
+            collection.insert_one(default_db)
+            return default_db
+        return doc
     except Exception as e:
         print(f"DB Load Error: {e}")
         return {"users": {}, "sellers": {}, "transactions": []}
@@ -24,52 +36,42 @@ def get_db():
 def save_db(data):
     """Save database"""
     try:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
+        data["_id"] = "main"
+        collection.replace_one({"_id": "main"}, data, upsert=True)
         return True
     except Exception as e:
         print(f"DB Save Error: {e}")
         return False
 
+# =====================
+# User Functions
+# =====================
+
 def init_user(uid):
     """Initialize user dengan default settings"""
     uid = str(uid)
     db = get_db()
-    
     if uid not in db["users"]:
         db["users"][uid] = {
-            "tier": "none",  # none, jaseb_only, autoreply, full, reseller
-            "expired": None,
-            "warranty": None,
-            "session": "",
-            "claimed_trial": False,
+            "uid": uid,
+            "access": False,
+            "access_until": None,
             "is_reseller": False,
+            "reseller_id": None,
             "reseller_customers": [],
-            "created_at": datetime.now().isoformat(),
+            "commission": 0,
             "settings": {
-                # AUTO BROADCAST
-                "bc_enabled": False,
-                "bc_text": "",
-                "bc_delay": 5,
-                "bc_targets": [],
-                
-                # AUTO FORWARD
-                "fw_enabled": False,
-                "fw_source_ch": "",
-                "fw_targets": [],
-                "fw_delay": 5,
-                
-                # AUTO REPLY
-                "ar_enabled": False,
-                "ar_keywords": [],  # [{"keyword": "hi", "response": "hello", "enabled": True}]
-                "ar_banwords": [],
-                
-                # GROUP MANAGEMENT
-                "groups": []
-            }
+                "auto_reply": False,
+                "auto_read": False,
+                "auto_typing": False,
+                "prefix": ".",
+                "language": "id"
+            },
+            "keywords": [],
+            "banwords": [],
+            "created_at": datetime.now().isoformat()
         }
-    
-    save_db(db)
+        save_db(db)
     return db["users"][uid]
 
 def get_user(uid):
@@ -77,317 +79,297 @@ def get_user(uid):
     uid = str(uid)
     db = get_db()
     if uid not in db["users"]:
-        init_user(uid)
+        return init_user(uid)
     return db["users"][uid]
 
-def save_user(uid, user_data):
+def save_user(uid, data):
     """Save user data"""
     uid = str(uid)
     db = get_db()
-    db["users"][uid] = user_data
-    save_db(db)
+    db["users"][uid] = data
+    return save_db(db)
 
-def check_access(uid, feature):
-    """Check user access to feature"""
-    user = get_user(uid)
-    tier = user.get("tier", "none")
-    expired = user.get("expired")
-    
-    # Check if expired
-    if expired:
-        try:
-            exp_dt = datetime.fromisoformat(expired)
-            if datetime.now() > exp_dt:
-                return False
-        except:
-            pass
-    
-    # Feature access mapping
-    access_map = {
-        "jaseb_only": ["bc", "forward"],
-        "autoreply": ["reply"],
-        "full": ["bc", "forward", "reply", "ban", "group"],
-        "reseller": ["all"]
-    }
-    
-    allowed = access_map.get(tier, [])
-    
-    if "all" in allowed:
-        return True
-    return feature in allowed
-
-def grant_access(uid, tier, days=30, warranty_days=0):
-    """Grant access tier to user"""
+def check_access(uid):
+    """Check if user has access"""
     uid = str(uid)
     user = get_user(uid)
-    
-    expired = (datetime.now() + timedelta(days=days)).isoformat()
-    warranty = (datetime.now() + timedelta(days=warranty_days)).isoformat() if warranty_days > 0 else None
-    
-    user["tier"] = tier
-    user["expired"] = expired
-    user["warranty"] = warranty
-    
-    save_user(uid, user)
-    
-    return {
-        "success": True,
-        "tier": tier,
-        "expired": expired,
-        "warranty": warranty
-    }
+    if not user.get("access", False):
+        return False
+    access_until = user.get("access_until")
+    if access_until:
+        try:
+            until = datetime.fromisoformat(access_until)
+            if datetime.now() > until:
+                user["access"] = False
+                save_user(uid, user)
+                return False
+        except Exception:
+            pass
+    return True
 
-def make_reseller(uid):
-    """Convert user to reseller"""
+def grant_access(uid, duration_days=30):
+    """Grant access to user"""
+    uid = str(uid)
+    user = get_user(uid)
+    user["access"] = True
+    user["access_until"] = (datetime.now() + timedelta(days=duration_days)).isoformat()
+    return save_user(uid, user)
+
+def revoke_access(uid):
+    """Revoke access from user"""
+    uid = str(uid)
+    user = get_user(uid)
+    user["access"] = False
+    user["access_until"] = None
+    return save_user(uid, user)
+
+def get_all_users():
+    """Get all users"""
+    db = get_db()
+    return db.get("users", {})
+
+def get_active_users():
+    """Get users with active access"""
+    users = get_all_users()
+    active = {}
+    for uid, data in users.items():
+        if check_access(uid):
+            active[uid] = data
+    return active
+
+def delete_user(uid):
+    """Delete user"""
+    uid = str(uid)
+    db = get_db()
+    if uid in db["users"]:
+        del db["users"][uid]
+        save_db(db)
+    return True
+
+# =====================
+# Reseller Functions
+# =====================
+
+def make_reseller(uid, commission=0):
+    """Make user a reseller"""
     uid = str(uid)
     user = get_user(uid)
     user["is_reseller"] = True
-    user["tier"] = "reseller"
-    
-    # Give unlimited access
-    user["expired"] = (datetime.now() + timedelta(days=9999)).isoformat()
-    
-    save_user(uid, user)
-    return True
+    user["commission"] = commission
+    user["reseller_customers"] = user.get("reseller_customers", [])
+    return save_user(uid, user)
 
-def add_reseller_customer(seller_uid, customer_uid, tier, days=30):
-    """Reseller kasih akses ke customer mereka"""
-    seller_uid = str(seller_uid)
-    customer_uid = str(customer_uid)
-    
-    seller = get_user(seller_uid)
-    if not seller.get("is_reseller"):
-        return False
-    
-    # Grant access to customer
-    grant_access(customer_uid, tier, days, warranty_days=0)
-    
-    # Track customer di reseller
-    if customer_uid not in seller.get("reseller_customers", []):
-        seller["reseller_customers"].append(customer_uid)
-        save_user(seller_uid, seller)
-    
-    return True
+def remove_reseller(uid):
+    """Remove reseller status"""
+    uid = str(uid)
+    user = get_user(uid)
+    user["is_reseller"] = False
+    user["commission"] = 0
+    return save_user(uid, user)
 
-def remove_reseller_customer(seller_uid, customer_uid):
-    """Remove customer dari reseller"""
-    seller_uid = str(seller_uid)
-    customer_uid = str(customer_uid)
-    
-    seller = get_user(seller_uid)
-    if customer_uid in seller.get("reseller_customers", []):
-        seller["reseller_customers"].remove(customer_uid)
-        save_user(seller_uid, seller)
-        return True
-    return False
+def add_reseller_customer(reseller_id, customer_id):
+    """Add customer to reseller"""
+    reseller_id = str(reseller_id)
+    customer_id = str(customer_id)
+    user = get_user(reseller_id)
+    customers = user.get("reseller_customers", [])
+    if customer_id not in customers:
+        customers.append(customer_id)
+        user["reseller_customers"] = customers
+        save_user(reseller_id, user)
+    # Set reseller_id on customer
+    customer = get_user(customer_id)
+    customer["reseller_id"] = reseller_id
+    save_user(customer_id, customer)
+    return user
 
-def update_settings(uid, key, value):
+def remove_reseller_customer(reseller_id, customer_id):
+    """Remove customer from reseller"""
+    reseller_id = str(reseller_id)
+    customer_id = str(customer_id)
+    user = get_user(reseller_id)
+    customers = user.get("reseller_customers", [])
+    if customer_id in customers:
+        customers.remove(customer_id)
+        user["reseller_customers"] = customers
+        save_user(reseller_id, user)
+    # Remove reseller_id from customer
+    customer = get_user(customer_id)
+    customer["reseller_id"] = None
+    save_user(customer_id, customer)
+    return user
+
+def get_resellers():
+    """Get all resellers"""
+    users = get_all_users()
+    resellers = {}
+    for uid, data in users.items():
+        if data.get("is_reseller", False):
+            resellers[uid] = data
+    return resellers
+
+# =====================
+# Seller Functions
+# =====================
+
+def get_seller(uid):
+    """Get seller data"""
+    uid = str(uid)
+    db = get_db()
+    return db["sellers"].get(uid, {})
+
+def save_seller(uid, data):
+    """Save seller data"""
+    uid = str(uid)
+    db = get_db()
+    db["sellers"][uid] = data
+    return save_db(db)
+
+def get_all_sellers():
+    """Get all sellers"""
+    db = get_db()
+    return db.get("sellers", {})
+
+# =====================
+# Settings Functions
+# =====================
+
+def update_settings(uid, settings):
     """Update user settings"""
     uid = str(uid)
     user = get_user(uid)
-    
-    if "settings" not in user:
-        user["settings"] = {}
-    
-    user["settings"][key] = value
-    save_user(uid, user)
-    return True
+    current_settings = user.get("settings", {})
+    current_settings.update(settings)
+    user["settings"] = current_settings
+    return save_user(uid, user)
 
-def add_keyword(uid, keyword, response):
-    """Add auto reply keyword"""
+def get_settings(uid):
+    """Get user settings"""
     uid = str(uid)
     user = get_user(uid)
-    st = user.get("settings", {})
-    
-    keywords = st.get("ar_keywords", [])
-    
-    # Check if already exists
-    for kw in keywords:
-        if kw.get("keyword", "").lower() == keyword.lower():
-            return False
-    
-    keywords.append({
-        "keyword": keyword,
-        "response": response,
-        "enabled": True
-    })
-    
-    st["ar_keywords"] = keywords
-    user["settings"] = st
-    save_user(uid, user)
-    return True
+    return user.get("settings", {})
+
+def reset_settings(uid):
+    """Reset user settings to default"""
+    uid = str(uid)
+    user = get_user(uid)
+    user["settings"] = {
+        "auto_reply": False,
+        "auto_read": False,
+        "auto_typing": False,
+        "prefix": ".",
+        "language": "id"
+    }
+    return save_user(uid, user)
+
+# =====================
+# Keyword Functions
+# =====================
+
+def add_keyword(uid, keyword):
+    """Add keyword for user"""
+    uid = str(uid)
+    user = get_user(uid)
+    keywords = user.get("keywords", [])
+    if keyword not in keywords:
+        keywords.append(keyword)
+        user["keywords"] = keywords
+        save_user(uid, user)
+    return user
 
 def remove_keyword(uid, keyword):
-    """Remove auto reply keyword"""
+    """Remove keyword for user"""
     uid = str(uid)
     user = get_user(uid)
-    st = user.get("settings", {})
-    
-    keywords = st.get("ar_keywords", [])
-    keywords = [kw for kw in keywords if kw.get("keyword", "").lower() != keyword.lower()]
-    
-    st["ar_keywords"] = keywords
-    user["settings"] = st
-    save_user(uid, user)
-    return True
+    keywords = user.get("keywords", [])
+    if keyword in keywords:
+        keywords.remove(keyword)
+        user["keywords"] = keywords
+        save_user(uid, user)
+    return user
+
+def get_keywords(uid):
+    """Get all keywords for user"""
+    uid = str(uid)
+    user = get_user(uid)
+    return user.get("keywords", [])
+
+def clear_keywords(uid):
+    """Clear all keywords for user"""
+    uid = str(uid)
+    user = get_user(uid)
+    user["keywords"] = []
+    return save_user(uid, user)
+
+# =====================
+# Banword Functions
+# =====================
 
 def add_banword(uid, word):
-    """Add ban word"""
+    """Add banned word for user"""
     uid = str(uid)
     user = get_user(uid)
-    st = user.get("settings", {})
-    
-    banwords = st.get("ar_banwords", [])
-    word = word.strip().lower()
-    
+    banwords = user.get("banwords", [])
     if word not in banwords:
         banwords.append(word)
-    
-    st["ar_banwords"] = banwords
-    user["settings"] = st
-    save_user(uid, user)
-    return True
+        user["banwords"] = banwords
+        save_user(uid, user)
+    return user
 
 def remove_banword(uid, word):
-    """Remove ban word"""
+    """Remove banned word for user"""
     uid = str(uid)
     user = get_user(uid)
-    st = user.get("settings", {})
-    
-    banwords = st.get("ar_banwords", [])
-    word = word.strip().lower()
-    
-    banwords = [b for b in banwords if b != word]
-    
-    st["ar_banwords"] = banwords
-    user["settings"] = st
-    save_user(uid, user)
-    return True
+    banwords = user.get("banwords", [])
+    if word in banwords:
+        banwords.remove(word)
+        user["banwords"] = banwords
+        save_user(uid, user)
+    return user
 
-def add_bc_target(uid, target):
-    """Add broadcast target"""
+def get_banwords(uid):
+    """Get all banned words for user"""
     uid = str(uid)
     user = get_user(uid)
-    st = user.get("settings", {})
-    
-    targets = st.get("bc_targets", [])
-    target = target.strip()
-    
-    if target not in targets:
-        targets.append(target)
-    
-    st["bc_targets"] = targets
-    user["settings"] = st
-    save_user(uid, user)
-    return True
+    return user.get("banwords", [])
 
-def remove_bc_target(uid, target):
-    """Remove broadcast target"""
+def clear_banwords(uid):
+    """Clear all banned words for user"""
     uid = str(uid)
     user = get_user(uid)
-    st = user.get("settings", {})
-    
-    targets = st.get("bc_targets", [])
-    targets = [t for t in targets if t != target.strip()]
-    
-    st["bc_targets"] = targets
-    user["settings"] = st
-    save_user(uid, user)
-    return True
+    user["banwords"] = []
+    return save_user(uid, user)
 
-def add_fw_target(uid, target):
-    """Add forward target"""
-    uid = str(uid)
-    user = get_user(uid)
-    st = user.get("settings", {})
-    
-    targets = st.get("fw_targets", [])
-    target = target.strip()
-    
-    # Check if already exists
-    if isinstance(targets, list):
-        for t in targets:
-            if isinstance(t, dict) and t.get("target") == target:
-                return False
-            if isinstance(t, str) and t == target:
-                return False
-    
-    # Add new target
-    if isinstance(targets, list) and targets and isinstance(targets[0], dict):
-        targets.append({"target": target, "delay": 5})
-    else:
-        targets.append(target)
-    
-    st["fw_targets"] = targets
-    user["settings"] = st
-    save_user(uid, user)
-    return True
+# =====================
+# Transaction Functions
+# =====================
 
-def remove_fw_target(uid, target):
-    """Remove forward target"""
-    uid = str(uid)
-    user = get_user(uid)
-    st = user.get("settings", {})
-    
-    targets = st.get("fw_targets", [])
-    target = target.strip()
-    
-    if isinstance(targets, list):
-        new_targets = []
-        for t in targets:
-            if isinstance(t, dict) and t.get("target") != target:
-                new_targets.append(t)
-            elif isinstance(t, str) and t != target:
-                new_targets.append(t)
-        st["fw_targets"] = new_targets
-    
-    user["settings"] = st
-    save_user(uid, user)
-    return True
-
-def get_user_info(uid):
-    """Get full user info"""
-    user = get_user(uid)
-    
-    return {
-        "uid": uid,
-        "tier": user.get("tier"),
-        "expired": user.get("expired"),
-        "warranty": user.get("warranty"),
-        "is_reseller": user.get("is_reseller"),
-        "customers": len(user.get("reseller_customers", [])),
-        "session_status": "✅" if user.get("session") else "❌",
-        "trial_claimed": user.get("claimed_trial")
+def add_transaction(data):
+    """Add transaction"""
+    db = get_db()
+    transaction = {
+        "id": len(db["transactions"]) + 1,
+        "timestamp": datetime.now().isoformat(),
+        **data
     }
+    db["transactions"].append(transaction)
+    save_db(db)
+    return transaction
 
-def get_pricing():
-    """Get pricing structure"""
-    return {
-        "jaseb_only": {
-            "name": "🔵 Jaseb Only",
-            "1_bulan_nogar": 3500,
-            "1_bulan_fullgar": 4000,
-            "permanen_nogar": 10000,
-            "permanen_fullgar": 18000
-        },
-        "autoreply": {
-            "name": "🟢 Auto-Reply",
-            "1_bulan_nogar": 5000,
-            "1_bulan_fullgar": 7000,
-            "permanen_nogar": 20000,
-            "permanen_fullgar": 30000
-        },
-        "full": {
-            "name": "🟡 Full Fitur",
-            "1_bulan_nogar": 7000,
-            "1_bulan_fullgar": 10000,
-            "permanen_nogar": 25000,
-            "permanen_fullgar": 35000
-        },
-        "reseller": {
-            "name": "👑 Reseller",
-            "1_bulan": 40000,
-            "permanen": 250000
-        }
-    }
+def get_transactions():
+    """Get all transactions"""
+    db = get_db()
+    return db.get("transactions", [])
+
+def get_user_transactions(uid):
+    """Get transactions for specific user"""
+    uid = str(uid)
+    transactions = get_transactions()
+    return [t for t in transactions if str(t.get("uid")) == uid]
+
+def clear_transactions():
+    """Clear all transactions"""
+    db = get_db()
+    db["transactions"] = []
+    return save_db(db)
     
